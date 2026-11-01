@@ -1,0 +1,8 @@
+# 本机运行软件时的界面主题（深色终端风）。服务器上用 deploy/streamlit-config.toml
+[theme]
+base = "dark"
+primaryColor = "#00F0A8"
+backgroundColor = "#04070D"
+secondaryBackgroundColor = "#0A111C"
+textColor = "#C8D3E6"
+font = "monospace"

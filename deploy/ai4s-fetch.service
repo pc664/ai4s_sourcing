@@ -1,0 +1,20 @@
+[Unit]
+Description=AI4S 人才地图：每周重新抓取 OpenAlex 数据
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=ai4s
+Group=ai4s
+WorkingDirectory=/opt/ai4s_sourcing
+# --refresh all：所有领域按最新数据重抓；额度不够时会自动停下并先用已有数据出结果
+ExecStart=/opt/ai4s_sourcing/.venv/bin/python run.py --refresh all
+TimeoutStartSec=6h
+Nice=10
+Environment=PYTHONUNBUFFERED=1
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/opt/ai4s_sourcing
+ProtectHome=true
+PrivateTmp=true

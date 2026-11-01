@@ -1,0 +1,10 @@
+[Unit]
+Description=每周四凌晨 3:30（北京时间）更新通用AI赛道数据（与 AI4S 错开，避免同一天额度不够）
+
+[Timer]
+OnCalendar=Thu *-*-* 03:30:00 Asia/Shanghai
+Persistent=true
+RandomizedDelaySec=10min
+
+[Install]
+WantedBy=timers.target

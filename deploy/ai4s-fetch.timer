@@ -1,0 +1,10 @@
+[Unit]
+Description=每周一凌晨 3:30（北京时间）更新 AI4S 人才数据
+
+[Timer]
+OnCalendar=Mon *-*-* 03:30:00 Asia/Shanghai
+Persistent=true
+RandomizedDelaySec=10min
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,11 @@
+# Caddy 会自动申请并续期 HTTPS 证书（需要域名已解析到这台服务器，且 80/443 端口已开放）
+__SITE__ {
+	encode gzip
+	reverse_proxy 127.0.0.1:8501
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options nosniff
+		Referrer-Policy no-referrer
+		-Server
+	}
+}

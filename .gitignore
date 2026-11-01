@@ -1,0 +1,19 @@
+.env
+*.env
+.venv/
+venv/
+__pycache__/
+.ipynb_checkpoints/
+.DS_Store
+.streamlit/secrets.toml
+
+# secrets
+.openalex_key
+.s2_key
+# local data / generated outputs
+data/
+output/
+team.db
+*.db
+.fuse_hidden*
+Claude outputs/

@@ -1,0 +1,22 @@
+[Unit]
+Description=AI4S 人才地图（Streamlit 可视化软件）
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=ai4s
+Group=ai4s
+WorkingDirectory=/opt/ai4s_sourcing
+ExecStart=/opt/ai4s_sourcing/.venv/bin/streamlit run app.py
+Restart=always
+RestartSec=5
+Environment=PYTHONUNBUFFERED=1
+# 加固：除了软件目录，其他系统目录都只读
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/opt/ai4s_sourcing
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

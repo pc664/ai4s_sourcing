@@ -1,0 +1,14 @@
+[Unit]
+Description=AI4S 人才地图：备份团队数据库 team.db
+
+[Service]
+Type=oneshot
+User=ai4s
+Group=ai4s
+WorkingDirectory=/opt/ai4s_sourcing
+ExecStart=/opt/ai4s_sourcing/.venv/bin/python deploy/backup.py
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/opt/ai4s_sourcing
+ProtectHome=true
+PrivateTmp=true

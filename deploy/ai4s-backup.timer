@@ -1,0 +1,9 @@
+[Unit]
+Description=每天凌晨 2:15（北京时间）备份 team.db
+
+[Timer]
+OnCalendar=*-*-* 02:15:00 Asia/Shanghai
+Persistent=true
+
+[Install]
+WantedBy=timers.target

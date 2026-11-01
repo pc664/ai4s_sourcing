@@ -1,0 +1,20 @@
+# 服务器上的 Streamlit 配置（setup.sh 会复制到 .streamlit/config.toml）
+[server]
+headless = true
+address = "127.0.0.1"     # 只在本机监听，外部访问统一走 Caddy（HTTPS）
+port = 8501
+enableXsrfProtection = true
+
+[browser]
+gatherUsageStats = false
+
+[client]
+toolbarMode = "minimal"
+
+[theme]
+base = "dark"
+primaryColor = "#00F0A8"
+backgroundColor = "#04070D"
+secondaryBackgroundColor = "#0A111C"
+textColor = "#C8D3E6"
+font = "monospace"
