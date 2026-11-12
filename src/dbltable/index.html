@@ -1,0 +1,82 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<!-- 点名字打开的名单表格（Streamlit 自定义组件，纯 HTML，不需要编译）。
+     点名字 → 把这一行的作者号传回 Python；点表头排序。 -->
+<style>
+:root { --bg:#04070D; --panel:#0A111C; --line:#1B2A3D; --neon:#00F0A8; --cyan:#22D3EE; --text:#C8D3E6; --dim:#6B7C93;
+        --mono:"JetBrains Mono","SF Mono","Menlo","Consolas","Roboto Mono",monospace; }
+html, body { margin:0; background:transparent; color:var(--text); font-family:var(--mono); font-size:12.5px; }
+.wrap { border:1px solid var(--line); border-radius:6px; overflow:auto; background:rgba(10,17,28,.92); }
+table { border-collapse:separate; border-spacing:0; width:100%; }
+th { position:sticky; top:0; z-index:2; background:#0D1726; color:var(--dim); text-align:left; font-weight:500;
+     letter-spacing:.06em; padding:8px 10px; border-bottom:1px solid var(--line); white-space:nowrap; cursor:pointer;
+     user-select:none; }
+th:hover { color:var(--cyan); }
+th .arr { color:var(--neon); margin-left:4px; }
+td { padding:7px 10px; border-bottom:1px solid rgba(27,42,61,.6); white-space:nowrap; overflow:hidden;
+     text-overflow:ellipsis; max-width:240px; }
+td.wide { max-width:520px; }
+tr { cursor:default; }
+tbody tr:hover td { background:rgba(34,211,238,.07); }
+tbody tr.hit td { background:rgba(0,240,168,.18); }
+td.name { color:#E6F1FF; font-weight:600; cursor:pointer; }
+td.name:hover { color:var(--neon); text-decoration:underline; text-underline-offset:3px; }
+.bar { position:relative; height:14px; min-width:70px; background:#0F1B2B; border-radius:2px; }
+.bar i { position:absolute; left:0; top:0; bottom:0; background:linear-gradient(90deg,#0E7490,var(--neon)); border-radius:2px; }
+.bar b { position:relative; padding-left:5px; font-weight:500; font-size:11px; color:#E6F1FF; line-height:14px; }
+a { color:var(--cyan); }
+.empty { padding:18px; color:var(--dim); }
+</style></head>
+<body><div class="wrap" id="wrap"></div>
+<script>
+const send = (type, data) => window.parent.postMessage(Object.assign({isStreamlitMessage: true, type}, data), "*");
+let A = null, sortKey = null, sortAsc = false;
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+
+function cell(c, v) {
+  if (v === null || v === undefined || v === "" || (typeof v === "number" && isNaN(v))) return "—";
+  if (c.type === "bar") { const x = Math.max(0, Math.min(100, +v));
+    return `<div class="bar"><i style="width:${x}%"></i><b>${Math.round(+v)}</b></div>`; }
+  if (c.type === "num") return (+v).toLocaleString(undefined, {maximumFractionDigits: c.digits ?? 0}) + (c.suffix || "");
+  if (c.type === "link") return `<a href="${esc(v)}" target="_blank" rel="noopener">${esc(c.text || "打开")}</a>`;
+  return esc(v);
+}
+
+function render() {
+  const wrap = document.getElementById("wrap");
+  wrap.style.maxHeight = (A.height || 480) + "px";
+  let rows = A.rows.slice();
+  if (sortKey !== null) {
+    rows.sort((a, b) => { const x = a[sortKey], y = b[sortKey];
+      const nx = x === null || x === "" || x === undefined, ny = y === null || y === "" || y === undefined;
+      if (nx || ny) return nx - ny;
+      const r = (typeof x === "number" && typeof y === "number") ? x - y : String(x).localeCompare(String(y), "zh");
+      return sortAsc ? r : -r; });
+  }
+  if (!rows.length) { wrap.innerHTML = `<div class="empty">${esc(A.empty || "没有符合条件的人")}</div>`; fit(); return; }
+  const head = A.columns.map((c, i) => `<th data-k="${esc(c.key)}">${esc(c.label || c.key)}${
+      sortKey === c.key ? `<span class="arr">${sortAsc ? "▲" : "▼"}</span>` : ""}</th>`).join("");
+  const body = rows.map(r => `<tr data-id="${esc(r[A.id_col])}">` + A.columns.map(c =>
+      `<td class="${c.key === A.name_col ? "name" : ""} ${c.wide ? "wide" : ""}" title="${
+        c.type === "bar" || c.type === "link" ? "" : esc(r[c.key])}">${cell(c, r[c.key])}</td>`).join("") + "</tr>").join("");
+  wrap.innerHTML = `<table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`;
+  wrap.querySelectorAll("th").forEach(th => th.onclick = () => {
+    const k = th.dataset.k; if (sortKey === k) sortAsc = !sortAsc; else { sortKey = k; sortAsc = false; } render(); });
+  wrap.querySelectorAll("tbody td.name").forEach(td => td.onclick = () => {
+    const tr = td.parentElement;
+    tr.classList.add("hit");
+    send("streamlit:setComponentValue", {value: {id: tr.dataset.id, t: Date.now()}, dataType: "json"});
+  });
+  fit();
+}
+
+// iframe 高度跟着内容走（最多 A.height），行少时不留大片空白
+function fit() { send("streamlit:setFrameHeight", {height: document.getElementById("wrap").offsetHeight + 4}); }
+
+window.addEventListener("message", ev => {
+  if (ev.data.type !== "streamlit:render") return;
+  A = ev.data.args;
+  render();
+});
+send("streamlit:componentReady", {apiVersion: 1});
+</script></body></html>

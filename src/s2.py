@@ -412,18 +412,28 @@ def unify(works: list[dict], matches: dict[str, dict], cfg: dict, allow_api: boo
             if oid in aliases:
                 a["author"]["id"] = aliases[oid]
 
-    people = defaultdict(lambda: {"s2_ids": [], "names": Counter(), "orcid": None})
+    people = defaultdict(lambda: {"s2_ids": [], "names": Counter(), "dblp": Counter(), "orcid": None})
     for sid, pid in person.items():
         d = details.get(sid) or {}
         p = people[pid]
         p["s2_ids"].append(sid)
         if d.get("name"):
             p["names"][d["name"]] += (d.get("paperCount") or 0) + 1
+        for n in (d.get("externalIds") or {}).get("DBLP") or []:      # DBLP 的写法是人工校对过的本人常用名
+            base = DBLP_DISAMBIGUATED.sub("", n).strip()
+            if base:
+                p["dblp"][base] += (d.get("paperCount") or 0) + 1
         orcid = (d.get("externalIds") or {}).get("ORCID")
         p["orcid"] = p["orcid"] or (f"https://orcid.org/{orcid}" if orcid else None)
-    # 统一显示名：取最完整（最长）且常用的写法
+    # 统一显示名：优先用 DBLP 的写法（如 "Xuanhe Zhou"，而不是 S2 的 "Xuan-He Zhou"）；
+    # 没有 DBLP 时取不带缩写（"X. Zhou"）、最常用的写法
     for pid, p in people.items():
-        p["name"] = max(p["names"], key=lambda n: (len(n), p["names"][n])) if p["names"] else None
+        if p["dblp"]:
+            p["name"] = p["dblp"].most_common(1)[0][0]
+        elif p["names"]:
+            p["name"] = max(p["names"], key=lambda n: (not re.search(r"\b[A-Za-z]\.", n), p["names"][n], "-" not in n))
+        else:
+            p["name"] = None
     for w in works:
         for a in w.get("authorships") or []:
             pid = (a.get("author") or {}).get("id") or ""
@@ -437,16 +447,47 @@ def unify(works: list[dict], matches: dict[str, dict], cfg: dict, allow_api: boo
     return dict(people), out
 
 
+def recent_papers(cfg: dict, people: dict, wanted: list[str], allow_api: bool, years: int = 2) -> dict[str, list]:
+    """这些人最近 years 年的全部论文（标题 + 年份），用来判断他的「当前方向」。缓存在 data/s2/author_recent.jsonl。"""
+    path = S2_DIR / "author_recent.jsonl"
+    cache = _load(path)
+    since = time.localtime().tm_year - years + 1
+    need = [sid for pid in wanted for sid in people.get(pid, {}).get("s2_ids", []) if sid not in cache]
+    if need and allow_api:
+        print(f"[S2 近期论文] 拉取 {len(need)} 个作者号最近 {years} 年的论文标题（用于判断当前方向）…")
+        client = S2Client((cfg.get("s2") or {}).get("pause"))
+        buf = {}
+        try:
+            for sid, a in client.batch("author", need, "papers.year,papers.title", 100):
+                buf[sid] = [[p.get("year"), p.get("title")] for p in ((a or {}).get("papers") or [])
+                            if (p.get("year") or 0) >= since - 1]
+                if len(buf) >= 2000:
+                    _append(path, buf), cache.update(buf), buf.clear()
+        except S2Unavailable as e:
+            print(f"    {e}  已拉取的部分已保存，下次运行继续")
+        _append(path, buf), cache.update(buf)
+    out = {}
+    for pid in wanted:
+        items = [it for sid in people.get(pid, {}).get("s2_ids", []) for it in cache.get(sid, [])
+                 if (it[0] or 0) >= since]
+        if items:
+            out[pid] = items
+    return out
+
+
 def author_profiles(cfg: dict, people: dict, wanted: list[str], allow_api: bool,
-                    details: dict | None = None) -> list[dict]:
+                    details: dict | None = None, years_for: list[str] | None = None) -> list[dict]:
     """为 S2 人员生成与 OpenAlex 作者档案同结构的履历（h 指数、总发文、学术起始年）。
 
+    总发文 / 总被引 / h 指数来自已缓存的作者详情，wanted 里每个人都有；
+    学术起始年要另外拉论文年份（耗 API），只给 years_for 里的人拉（默认等于 wanted）。
     学术起始年取这个人所有作者号下论文年份的第 5 百分位，避免被个别归错的老论文拉早。
     """
     path = S2_DIR / "author_years.jsonl"
     years = _load(path)
     details = details if details is not None else _load(S2_DIR / "authors.jsonl")
-    need = [sid for pid in wanted for sid in people.get(pid, {}).get("s2_ids", []) if sid not in years]
+    need = [sid for pid in (wanted if years_for is None else years_for)
+            for sid in people.get(pid, {}).get("s2_ids", []) if sid not in years]
     if need and allow_api:
         print(f"[S2 履历] 拉取 {len(need)} 个作者号的论文年份（用于学术年龄）…")
         client = S2Client((cfg.get("s2") or {}).get("pause"))

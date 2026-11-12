@@ -1,11 +1,12 @@
 """人才库构建：把赛道论文聚合到作者，计算画像特征与 sourcing 评分。
 
-评分为 P0 启发式版本（可解释、无需标签）。P1 用历史创始人标签训练的
-创业倾向模型替换「创业信号分」。
+评分为启发式版本（可解释、无需标签）：综合分 = 学术实力 50% + 增长势头 50%。
 """
 from __future__ import annotations
 
+import json
 import math
+import re
 from collections import Counter, defaultdict
 from datetime import date
 
@@ -16,13 +17,50 @@ from src import taxonomy as tx
 THIS_YEAR = date.today().year
 
 
+def norm_title(t: str | None) -> str:
+    return re.sub(r"[^a-z0-9]", "", (t or "").lower())[:120]
+
+
+def apply_recent_papers(df: pd.DataFrame, recent: dict[str, list], tax: dict) -> pd.DataFrame:
+    """用作者本人的近期论文（S2 作者主页上的全部论文标题，不限于人才库的检索范围）修正「当前方向」。
+    recent：人员号 → [[年份, 标题], …]。只按标题打标签；人才库里已有的论文不重复计算。"""
+    if not len(df) or "_dw" not in df:
+        return df
+    half = tax.get("domain_half_life", 1.5)
+    order, parent, group = tx.domain_order(tax), tx.domain_parent(tax), tx.sub_group(tax)
+    this_year = THIS_YEAR
+    df = df.copy()
+    for i, r in df.iterrows():
+        items = recent.get(r["author_id"])
+        if not items:
+            continue
+        have = set(str(r["_tn"]).split("|"))
+        dw, dr = Counter(json.loads(r["_dw"])), Counter(json.loads(r["_dr"]))
+        added = 0
+        for year, title in items:
+            if not title or norm_title(title) in have:
+                continue
+            tags = tx.tag_work(title, "", None, tax, strict=True)["科学领域"]
+            if not tags:
+                continue
+            wgt = 0.5 ** (max(0, this_year - (year or 0)) / half)
+            for d in tags:
+                dw[d] += wgt
+                dr[d] += 1
+            added += 1
+        if not added:
+            continue
+        main, sec = tx.current_main_and_secondary(dw, dr, order, tax.get("domain_secondary_share", 0.6),
+                                                  tax.get("domain_secondary_min_papers", 3))
+        df.at[i, "主学科"], df.at[i, "副学科"] = main, sec
+        df.at[i, "一级学科"] = parent.get(main, tx.UNCLASSIFIED)
+        df.at[i, "大类"] = group.get(main, tx.UNCLASSIFIED)
+        df.at[i, "近期论文方向"] = " | ".join(f"{k} {v:.1f}" for k, v in dw.most_common(4))
+    return df
+
+
 def _short(oa_id: str | None) -> str:
     return (oa_id or "").rsplit("/", 1)[-1]
-
-
-def _is_feeder(name: str, feeders: list[str]) -> bool:
-    n = (name or "").lower()
-    return any(f.lower() in n for f in feeders)
 
 
 def _best(items: list[tuple]) -> tuple:
@@ -62,11 +100,12 @@ def build_author_table(works: list[dict], labels: dict[str, dict], tcfg: dict,
     """works: 已判定为赛道相关的论文；labels: work_id -> 分类结果（含科学领域 / AI方法标签）。"""
     recent_from = THIS_YEAR - tcfg["recent_years"] + 1
     prev_from = recent_from - tcfg["recent_years"]
+    half_life = (tax or {}).get("domain_half_life", 1.5)   # 定「当前方向」时论文权重的半衰期（年）
     A = defaultdict(lambda: {
         "papers": [], "first": 0, "last": 0, "corr": 0, "cites": 0,
         "years": [], "subtopics": Counter(), "coauthors": Counter(),
         "inst_seq": [], "industry_papers": 0, "name": "", "orcid": None,
-        "domains": Counter(), "methods": Counter(), "ai_side": 0,
+        "domains": Counter(), "domains_w": Counter(), "methods": Counter(), "ai_side": 0,
         "r_first": 0, "r_lead": 0, "r_cites": 0, "pcts": [], "lead_pcts": [], "r_best": (-1, ""),
         # 创业信号用：独立带队的时间线、近期合作圈、近期 / 前期产业合作、系统化 / 验证 / 壁垒类成果
         "pi_papers": [], "v_coauth": Counter(), "v_ind": [0, 0], "v_prev_ind": [0, 0],
@@ -99,6 +138,9 @@ def build_author_table(works: list[dict], labels: dict[str, dict], tcfg: dict,
             r["industry_papers"] += has_company
             r["subtopics"].update(labels[wid]["subtopics"])
             r["domains"].update(labels[wid].get("科学领域", []))
+            w_recent = 0.5 ** (max(0, THIS_YEAR - year) / half_life) if year else 0.05   # 越新的论文权重越大
+            for d in labels[wid].get("科学领域", []):
+                r["domains_w"][d] += w_recent
             r["methods"].update(labels[wid].get("AI方法", []))
             r["ai_side"] += bool(labels[wid].get("AI侧论文"))
             pct = labels[wid].get("被引百分位")
@@ -146,12 +188,25 @@ def build_author_table(works: list[dict], labels: dict[str, dict], tcfg: dict,
         tags = {}
         if tax:
             share = tax.get("secondary_min_share", 0.3)
-            d_main, d_sec = tx.main_and_secondary(r["domains"], tx.domain_order(tax), share)
-            m_main, m_sec = tx.main_and_secondary(r["methods"], tx.method_order(tax), share)
+            d_main, d_sec = tx.current_main_and_secondary(r["domains_w"], r["domains"], tx.domain_order(tax),
+                                                          tax.get("domain_secondary_share", 0.6),
+                                                          tax.get("domain_secondary_min_papers", 3))
+            mc = r["methods"]
+            prefer = tax.get("method_prefer_specific")
+            if prefer:   # 兜底类别（如「算法与方法」）太泛：具体形态的论文够多时，主/副标签只在具体形态里选
+                fb = tax["ai_method_fallback"]
+                spec = Counter({k: v for k, v in mc.items() if k != fb})
+                if sum(spec.values()) >= max(2, prefer * n):
+                    mc = spec
+            m_main, m_sec = tx.main_and_secondary(mc, tx.method_order(tax), share)
             tags = {
+                "大类": tx.sub_group(tax).get(d_main, tx.UNCLASSIFIED),
                 "一级学科": tx.domain_parent(tax).get(d_main, tx.UNCLASSIFIED),
                 "主学科": d_main, "副学科": d_sec, "主方法": m_main, "副方法": m_sec,
                 "学科分布": " | ".join(f"{k} {v}" for k, v in r["domains"].most_common()),
+                "_dw": json.dumps(dict(r["domains_w"]), ensure_ascii=False),
+                "_dr": json.dumps(dict(r["domains"]), ensure_ascii=False),
+                "_tn": "|".join(sorted({norm_title(p[3]) for p in r["papers"]})),
                 "方法分布": " | ".join(f"{k} {v}" for k, v in r["methods"].most_common()),
                 "赛道AI侧论文占比": round(r["ai_side"] / n, 2),
             }
@@ -177,7 +232,6 @@ def build_author_table(works: list[dict], labels: dict[str, dict], tcfg: dict,
             "常合作者": "、".join(n for n, _ in r["coauthors"].most_common(5)),
             "代表作": top[3],
             "代表作被引": top[2],
-            "出身创始人工厂": any(_is_feeder(i, tcfg["feeder_institutions"]) for i in insts_ordered),
             "近期第一作者数": r["r_first"],
             "近期末位或通讯数": r["r_lead"],
             "近期被引": r["r_cites"],
@@ -188,7 +242,6 @@ def build_author_table(works: list[dict], labels: dict[str, dict], tcfg: dict,
             "主导论文数": len(r["lead_pcts"]),
             "近期最佳论文": r["r_best"][1],
             "近期最佳论文百分位": r["r_best"][0] if r["r_best"][0] >= 0 else None,
-            **_venture_features(r),
             **tags,
         })
     return pd.DataFrame(rows)
@@ -239,8 +292,14 @@ def score(df: pd.DataFrame, tcfg: dict, tax: dict | None = None) -> pd.DataFrame
         career = df.get("生涯AI侧占比", pd.Series(index=df.index, dtype=float))
         df["AI侧占比"] = career.fillna(df["赛道AI侧论文占比"])
         df["类型依据"] = career.notna().map({True: "生涯主题", False: "AI4S论文"})
-        df["人才类型"] = [tx.talent_type(v, tax["talent_type"], c == "生涯主题")
-                       for v, c in zip(df["AI侧占比"], df["类型依据"])]
+        if tax["talent_type"].get("mode") == "sector":
+            get = lambda c: df.get(c, pd.Series(index=df.index, dtype=object))
+            df["类型依据"] = "机构与产业合作"
+            df["人才类型"] = [tx.sector_type(a, b, c, tax["talent_type"])
+                           for a, b, c in zip(get("当前机构类型"), get("最近加入机构类型"), get("产业合作论文占比"))]
+        else:
+            df["人才类型"] = [tx.talent_type(v, tax["talent_type"], c == "生涯主题")
+                           for v, c in zip(df["AI侧占比"], df["类型依据"])]
         hh = df.get("h指数", pd.Series(index=df.index, dtype=float))
         df["层级"] = [tx.tier(a, b, tax["tiers"]) for a, b in zip(df["学术年龄"], hh)]
 
@@ -252,36 +311,18 @@ def score(df: pd.DataFrame, tcfg: dict, tax: dict | None = None) -> pd.DataFrame
     momentum = (df["近期论文数"] + 1) / (df["前期论文数"] + 1)
     df["增长势头分"] = (0.5 * _pct(df["近期论文数"]) + 0.5 * _pct(momentum)).round(1)
 
-    # 创业信号（启发式，P1 替换为监督模型）
-    moved_recent = df.get("最近加入年份", pd.Series(0, index=df.index)).fillna(0) >= THIS_YEAR - 2
-    to_company = df.get("最近加入机构类型", pd.Series("", index=df.index)).fillna("").eq("company") \
-        | df["当前机构类型"].fillna("").eq("company")
-    sweet = df["学术年龄"].between(5, 14)
-    sig = (25 * df["产业合作论文占比"].clip(0, 1)
-           + 20 * df["出身创始人工厂"].astype(int)
-           + 20 * (moved_recent & to_company).astype(int)
-           + 10 * moved_recent.astype(int)
-           + 15 * sweet.astype(int)
-           + 10 * (df["近期论文数"] >= 2).astype(int))
-    df["创业信号分"] = sig.clip(0, 100).round(1)
-
-    df["综合分"] = (0.35 * df["学术实力分"] + 0.35 * df["增长势头分"]
-                 + 0.30 * df["创业信号分"]).round(1)
+    df["综合分"] = (0.5 * df["学术实力分"] + 0.5 * df["增长势头分"]).round(1)
 
     def reasons(r) -> str:
         out = []
-        if r["出身创始人工厂"]:
-            out.append("出身创始人工厂型机构")
-        if r.get("最近加入年份") and r["最近加入年份"] >= THIS_YEAR - 2:
-            out.append(f"{int(r['最近加入年份'])}年加入{r.get('最近加入机构') or '新机构'}")
-        if r["当前机构类型"] == "company":
-            out.append(f"已在企业：{r['当前机构']}（核实是否为初创）")
-        if r["产业合作论文占比"] >= 0.3:
-            out.append(f"产业合作占比{int(r['产业合作论文占比'] * 100)}%")
+        if r["学术实力分"] >= 90:
+            out.append("学术实力居全库前 10%")
+        if r["增长势头分"] >= 90:
+            out.append("近期产出势头居全库前 10%")
         if r["近期论文数"] >= 3 and r["近期论文数"] > r["前期论文数"]:
             out.append(f"近{tcfg['recent_years']}年产出加速（{r['前期论文数']}→{r['近期论文数']}）")
-        if r["职业阶段"] == "博后末期/青年PI":
-            out.append("处于创业高发职业阶段")
+        if (r["末位作者数"] + r["通讯作者数"]) >= 5:
+            out.append(f"{int(r['末位作者数'] + r['通讯作者数'])} 篇末位/通讯作者论文")
         return "；".join(out)
 
     df["推荐理由"] = df.apply(reasons, axis=1)

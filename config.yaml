@@ -1,7 +1,7 @@
 # AI4S 投资 sourcing —— 配置
 # 范围：AI × 全部科学领域（全球），按「科学领域」分批从 OpenAlex 抓取，见下方 fetch 段
 
-track_name: "AI4S全领域"
+track_name: "AI人才地图"
 
 # 登录：多人共用时保持开启；只在自己电脑上单人用可以改成 false
 # 账号用 python3 manage_users.py 管理（第一次先建管理员），数据存在 team.db
@@ -58,6 +58,32 @@ classifier:
     - artificial intelligence
     - physics-informed
     - neural operator
+    # 通用 AI 方向的 AI 词
+    - llm
+    - llms
+    - world model
+    - agent
+    - agents
+    - multi-agent
+    - pretrain
+    - post-training
+    - rlhf
+    - mixture of experts
+    - vision-language
+    - multimodal
+    - code generation
+    - benchmark
+    - diffusion
+    - robot
+    - jailbreak
+    - generative
+    - neural radiance
+    - gaussian splatting
+    - autonomous driving
+    - automl
+    - neural architecture search
+    - chatgpt
+    - gpt-4
   # 【旧版】蛋白赛道领域词，已不再用于判定；现在论文需命中 AI 方法词 + taxonomy 里任一科学领域
   domain_terms:
     - protein
@@ -121,6 +147,23 @@ fetch:
     天文与宇宙学: '(galaxy OR galaxies OR cosmology OR astronomy OR astrophysics OR "gravitational wave" OR exoplanet)'
     AI for Math: '("theorem proving" OR "formal proof" OR "mathematical reasoning" OR "mathematical discovery" OR conjecture OR "symbolic regression")'
     科学发现方法与科学计算: '("scientific discovery" OR "physical laws" OR "physical law" OR "symbolic formula" OR "symbolic formulas" OR "scientific machine learning" OR "physics-informed" OR "physics-inspired")'
+    # ---- 通用 AI 方向（检索式本身就是 AI 词，不再拼接上面的 ai_clause，见 no_ai_clause）----
+    大模型训练与自进化: '("large language model" OR "large language models" OR LLM OR LLMs) AND ("reinforcement learning" OR "post-training" OR RLHF OR "self-improvement" OR "self-improving" OR "self-evolving" OR "test-time scaling" OR "chain-of-thought" OR "scaling law")'
+    模型架构与基础模型: '("foundation model" OR "foundation models" OR "mixture of experts" OR "mixture-of-experts" OR "state space model" OR "Kolmogorov-Arnold" OR "model architecture" OR "multimodal large language model" OR "vision-language model" OR "graph neural network")'
+    世界模型与空间智能: '("world model" OR "world models" OR "spatial intelligence" OR "embodied agent" OR "embodied AI" OR "3D scene understanding" OR "video generation")'
+    数据合成与评测: '("synthetic data" OR "data synthesis" OR "data curation" OR "data selection" OR "data recipe" OR benchmark OR "evaluation") AND ("large language model" OR "large language models" OR LLM OR LLMs OR "foundation model")'
+    智能体与工具链: '("LLM agent" OR "LLM agents" OR "language agent" OR "AI agent" OR "multi-agent" OR "tool use" OR "tool learning" OR "agent memory" OR "long-term memory" OR "code generation" OR "GUI agent" OR "deep research")'
+    AI系统与数据基础设施: '("machine learning system" OR "LLM serving" OR "LLM inference" OR "inference acceleration" OR "distributed training" OR "AI for database" OR "vector database" OR "database tuning")'
+    推理与对齐: '("chain-of-thought" OR "test-time scaling" OR "reasoning model" OR "preference optimization" OR "reward model" OR "process reward" OR "mathematical reasoning" OR "in-context learning") AND ("large language model" OR "large language models" OR LLM OR LLMs)'
+    可信与安全: '("large language model" OR "large language models" OR LLM OR LLMs OR "foundation model" OR "deep neural network" OR "deep neural networks") AND (jailbreak OR "red teaming" OR "AI safety" OR "adversarial attack" OR backdoor OR hallucination OR "machine unlearning" OR watermark OR interpretability OR "membership inference")'
+    生成模型与多模态: '("diffusion model" OR "diffusion models" OR "text-to-image" OR "text-to-video" OR "image generation" OR "vision-language model" OR "multimodal large language model" OR "gaussian splatting" OR "neural radiance field")'
+    具身智能: '("vision-language-action" OR "robot learning" OR "robotic manipulation" OR "imitation learning" OR "sim-to-real" OR "humanoid robot" OR "autonomous driving" OR "vision-language navigation")'
+    代码与软件智能体: '("code generation" OR "large language models for code" OR "program synthesis" OR "SWE-bench" OR "automated program repair" OR "text-to-SQL" OR "software engineering agent")'
+    AI for AI: '("neural architecture search" OR AutoML OR "automated machine learning" OR "AI scientist" OR "automated research" OR "research agent" OR "machine learning engineering agent")'
+  # 这些领域的检索式不拼接 ai_clause；它们抓到的论文归入一级学科「通用AI」（除非论文明确属于某个科学领域）
+  # 这些 AI4S 检索领域的论文属于「AI研究者」方向（检索式仍拼接 ai_clause）
+  ai_side: [AI for Math, 科学发现方法与科学计算]
+  no_ai_clause: [大模型训练与自进化, 模型架构与基础模型, 世界模型与空间智能, 数据合成与评测, 智能体与工具链, AI系统与数据基础设施, 推理与对齐, 可信与安全, 生成模型与多模态, 具身智能, 代码与软件智能体, AI for AI]
 
 # =====================================================================
 # Semantic Scholar 补充数据源（修正 OpenAlex 对 AI 学者、常见中文名的作者识别错误）
@@ -137,32 +180,13 @@ s2:
   newest_months: 6
 
 # =====================================================================
-# 创业信号雷达（软件「🎯 创业雷达」页、Excel「创业雷达」表）
-#   成熟度：他是不是快要出来创业了（时机）   潜力：他的技术值不值得投（价值）
-#   两项都是 0–100，在同一赛道的活跃学者之间比较；权重会自动归一化
-#   下面的关键词用来识别论文的类型（标题 + 摘要，不区分大小写，长词允许后缀）
-# =====================================================================
-venture:
-  weights_readiness: {职业转折: 0.25, 独立带队: 0.25, 核心团队: 0.15, 产业合作上升: 0.15, 系统化产出: 0.20}
-  weights_potential: {成果质量: 0.35, 离产品距离: 0.25, 赛道窗口期: 0.20, 技术壁垒: 0.20}
-  quadrant_cut: 80          # 两项都 ≥ 这个分数（百分位）→「现在就该见」；调高名单更短
-  min_recent_papers: 1      # 近 3 年至少有这么多篇本赛道论文才参与评分
-  # 成果从「方法」走向「系统 / 工具 / 平台」：离产品更近
-  system_terms: ["open-source", "open source", toolkit, "software package", "software tool", platform, "end-to-end system", "github.com", deployed, deployment, "web server", "user interface", "we release", "publicly available", "python package"]
-  # 有真实世界验证：实验、临床、实地部署
-  validation_terms: ["experimental validation", "experimentally validated", "validated experimentally", "wet-lab", "wet lab", "in vitro", "in vivo", synthesized, "clinical trial", prospective, "real-world", "field test", "autonomous lab", "self-driving lab", "closed-loop", "high-throughput screening", "clinical validation", "external validation cohort"]
-  # 难复制的资产：自建数据、平台、实验能力
-  moat_terms: ["large-scale dataset", "we curate", "we collected", "we construct a dataset", "new dataset", "benchmark dataset", "proprietary", "high-throughput", "automated laboratory", "foundation model", "pretrained on"]
-
-# =====================================================================
-# 学术新星 · 创业潜力榜（软件「🚀 新星榜」页、Excel「新星榜」表）
+# 学术新星榜（软件「🚀 新星榜」页、Excel「新星榜」表）
 # 资格：学术年龄 ≤ max_academic_age、不是 exclude_tiers 层级、近期 AI4S 论文 ≥ min_recent_papers、
 #       最近 active_within_years 年内仍有 AI4S 论文
-# 新星分：只在有资格的人之间比较，四项加权（权重会自动归一化）
+# 新星分：只在有资格的人之间比较，三项加权（权重会自动归一化）
 #   影响力  最好 3 篇论文在「同年同领域」里的被引百分位 + 近期被引（新论文只和同年论文比，不吃亏）
 #   势头    近期产出量与加速度
 #   独立性  近期末位/通讯作者论文数（正在成为独立 PI）+ 第一作者论文数
-#   创业信号 产业合作、创始人工厂出身、近期跳槽（尤其去企业）、创业高发阶段
 # =====================================================================
 rising_star:
   max_academic_age: 12
@@ -171,65 +195,111 @@ rising_star:
   exclude_tiers: [领军]
   min_recent_papers: 2
   active_within_years: 1
-  weights: {影响力: 0.40, 势头: 0.15, 独立性: 0.20, 创业信号: 0.25}   # 影响力权重最高：防止只靠发文数量冲榜
+  weights: {影响力: 0.55, 势头: 0.20, 独立性: 0.25}   # 影响力权重最高：防止只靠发文数量冲榜
   top_n_per_domain: 30        # Excel 里每个领域列出前多少名
 
 talent:
-  # "创始人工厂"型机构（名称包含匹配，不区分大小写）——过往孵化过多家该赛道公司
-  feeder_institutions:
-    - University of Washington      # Baker 实验室 / IPD
-    - DeepMind                      # 含 Google DeepMind
-    - Isomorphic Labs
-    - Genentech
-    - Meta (United States)          # ESM 团队（后成立 EvolutionaryScale）
-    - EvolutionaryScale
-    - Microsoft Research
-    - NVIDIA
-    - Massachusetts Institute of Technology
-    - Stanford University
-    - Harvard University
-    - Columbia University
-    - Arc Institute
-    - Generate Biomedicines
-    - Absci
-    - Peking University
-    - Tsinghua University
-    - Westlake University
   recent_years: 2          # "近期"窗口
   min_track_papers: 2      # 进入人才库的最低赛道论文数
   top_n_enrich: 6000       # 对前 N 名作者调用作者接口补全职业信息（增量：已拉过的不重复拉）
 
 # =====================================================================
-# 人才地图分类体系：「科学领域 × AI方法」两个主维度 + 四个标签
+# 人才地图分类体系：「科学领域 × AI方法」两个主维度 + 三个标签
 # 关键词规则（不区分大小写；≤4 个字母的词要求整词匹配，长词允许后缀）
 # 每篇论文可以命中多个类别；每位作者取出现最多的为「主」，第二多的为「副」
 # =====================================================================
 taxonomy:
-  # 维度1：科学领域（一级 → 二级 → 关键词）
+  # 分类体系（对照「牵头科学家人才树」）：大类 → 领域 → 关键词（每个领域下只有一个同名的细分项，程序内部沿用两层结构）
+  #   大类：AI研究者（按方向）/ 科学家（按学科），见下面 groups
+  #   一篇论文按关键词打领域标签；作者取篇数最多的为主、第二多的为副
+  labels: {group: 大类, top: 领域, domain: 领域, method: AI方法}
   science_domains:
-    生命科学与医学:
-      蛋白与核酸设计: [protein, antibod, nanobod, enzyme, peptide, binder, "rna design", aptamer, "nucleic acid"]
-      药物发现: ["drug discovery", "drug design", "small molecule", "small-molecule", ligand, "virtual screening", admet, "drug-target", "lead optimization", "protein-ligand"]
-      细胞与多组学: ["single-cell", "single cell", transcriptom, genomic, proteomic, "multi-omic", multiomic, "gene expression", "virtual cell", "spatial omics", "perturbation"]
-      医学AI与临床: [clinical, patient, diagnos, "medical imag", ehr, hospital, "electronic health", radiolog, patholog]
-    化学与材料:
-      分子与反应: [retrosynthe, "chemical reaction", "reaction prediction", "molecular generation", "molecule generation", "molecular property", "organic synthesis", "chemical synthesis"]
-      计算材料: ["materials discovery", "crystal structure", "density functional", dft, "interatomic potential", "materials design", "inorganic material", "crystal structure prediction"]
-      材料实验与器件: ["thin film", perovskite, semiconductor, "device fabrication", polymer]
-      能源与催化: [batter, electrolyte, electrocataly, photocataly, "heterogeneous cataly", "solar cell", "hydrogen evolution", "co2 reduction"]
-    物理:
-      量子与凝聚态: [quantum, "condensed matter", superconduct, "many-body", "spin system", "phase transition"]
-      等离子体与空间物理: [plasma, "nuclear fusion", tokamak, magnetosphere, "space weather", "solar wind"]
-      光学与光子: [photonic, metasurface, "optical design", nanophotonic, laser]
-    地球与宇宙:
-      气象气候: [weather, climate, precipitation, atmospher, ocean, typhoon]
-      地球物理: [seismic, seismolog, earthquake, geophysic, "remote sensing"]
+    # ---------------- AI研究者 · 按方向
+    RSI与自进化:
+      RSI与自进化: [pretrain, pre-train, "scaling law", "mixture of experts", "mixture-of-experts", moe, "state space model", mamba, "linear attention", "long context", "long-context", "model architecture", "language model pretraining", "small language model", rlhf, "human feedback", "preference optimization", dpo, grpo, ppo, "reward model", "verifiable reward", rlvr, alignment, "post-training", "instruction tuning", "supervised fine-tuning", "self-improv", "self-evolv", "self-play", "self-rewarding", "self-refine", "self-correct", "self-reflect", "recursive self", "continual learning", "lifelong learning", "open-ended", "self-training", "reinforcement learning", rl, rlhf, reward, "binary feedback", "data-free training"]
+    AI for AI:
+      # 包括「用科学方法研究 AI 本身」（元模型、训练动力学、AI 的物理学），如刘子鸣
+      AI for AI: [automl, "neural architecture search", "architecture search", "automated machine learning", "hyperparameter optimization", "machine learning engineering", "mle-bench", "research agent", "automated ai research", "ai research agent", "agent design", "automated design", "meta-learning", "learning to optimize", "kolmogorov-arnold", "meta model", "meta-model", "models that model", "physics of", "neural scaling", "training dynamics", "learning dynamics", "inductive bias", "weight matrices", "skill learning", "depth scaling", "time scaling", "thermodynamic laws", "science of deep learning", "training intuition"]
+    智能体与推理:
+      智能体与推理: ["llm agent", "language agent", "ai agent", "autonomous agent", agentic, "tool use", "tool learning", "tool-use", "function calling", "agent memory", "long-term memory", "web agent", "gui agent", "deep research", "computer use", "llm-based agent", "multi-agent", "multi agent", "multiple agents", "retrieval-augmented", "retrieval augmented", "chain-of-thought", "chain of thought", "test-time scaling", "test-time compute", "reasoning model", "large reasoning model", "math reasoning", "mathematical reasoning", "long reasoning", "slow thinking", "process reward", "tree of thoughts", "step-by-step", "reasoning ability", "reasoning capabilit", "in-context learning", prompting, "prompt engineering", "prompt optimization", "instruction following", "code generation", "code llm", "code language model", "large language models for code", "program synthesis", "software engineering", "swe-bench", "program repair", "code completion", "text-to-sql", "theorem proving", "theorem prover", "formal proof", "formal verification", "lean 4", lean4, mathlib, conjecture, "mathematical discovery"]
+    可信与安全:
+      可信与安全: [jailbreak, "red teaming", "red-teaming", "ai safety", "llm safety", "safety alignment", harmful, "prompt injection", guardrail, deceptive, misalignment, adversarial, backdoor, "membership inference", "differential privacy", privacy, watermark, "data poisoning", "federated learning", unlearning, hallucination, interpretab, mechanistic, "sparse autoencoder", factuality, explainab, "knowledge editing", "model editing", truthful]
+    多模态·生成·世界模型:
+      多模态·生成·世界模型: ["vision-language", "vision language model", "multimodal large language model", mllm, mllms, "multimodal llm", "large multimodal model", "visual question answering", "visual instruction", "image-text", "audio-language", "speech language model", "omni-modal", "video understanding", "diffusion model", "text-to-image", "text-to-video", "image generation", "video generation", "image editing", "image synthesis", "flow matching", "latent diffusion", "generative adversarial", "world model", "video prediction", "interactive environment", "gaussian splatting", nerf, "neural radiance", "3d generation", "3d reconstruction", "spatial intelligence", "spatial reasoning", "3d scene", "novel view synthesis", "causal world"]
+    科学智能体与基础模型:
+      科学智能体与基础模型: ["ai scientist", "scientific agent", "science agent", "hypothesis generation", "scientific discovery", "scientific foundation model", "foundation model for science", "scientific large language model", "scientific llm", "science llm", "physical law", "symbolic regression", "symbolic formula", "scientific machine learning", "physics-informed", "physics-inspired", "for science", "scientific reasoning"]
+    具身智能:
+      具身智能: ["vision-language-action", vla, "robot manipulation", "robotic manipulation", "robot learning", "imitation learning", "sim-to-real", dexterous, humanoid, embodied, legged, "robot policy", "diffusion policy", "autonomous driving", "self-driving", "end-to-end driving", "trajectory prediction", "vision-language navigation", "motion planning"]
+    图学习·数据与系统:
+      图学习·数据与系统: ["synthetic data", "data synthesis", "data curation", "data selection", "data mixture", "data recipe", "data quality", "data filtering", "pretraining data", "instruction data", "data contamination", benchmark, leaderboard, "llm-as-a-judge", "llm as a judge", "evaluation framework", "llm serving", "llm inference", "inference acceleration", "distributed training", "kv cache", quantiz, "speculative decoding", "model compression", pruning, "knowledge distillation", "parameter-efficient", lora, "low-rank adaptation", "gpu kernel", "machine learning system", "mixed-precision", "graph neural", gnn, gnns, "knowledge graph", "graph learning", "graph foundation", "vector database", "ai for database", "database tuning", "recommender system"]
+    # ---------------- 科学家 · 按学科
+    地球与气候:
+      地球与气候: [weather, climate, precipitation, atmospher, ocean, typhoon, seismic, seismolog, earthquake, geophysic, "remote sensing", "land surface", hydrolog]
+    空间与等离子体物理:
+      空间与等离子体物理: [plasma, "nuclear fusion", tokamak, magnetosphere, "space weather", "solar wind", "laser-plasma", ionosphere]
+    天文与宇宙学:
       天文与宇宙学: [galax, cosmolog, astronom, astrophysic, stellar, telescope, "dark matter", exoplanet, "gravitational wave"]
-    数学:
-      AI for Math: ["theorem proving", "theorem prover", "formal proof", conjecture, "lean 4", lean4, mathlib, "mathematical discovery", "mathematical reasoning", "symbolic regression"]
-    # 不属于具体学科的通用科学发现方法（如 KAN、科学机器学习、物理启发模型）；放在最后，篇数相同时优先归到具体学科
-    通用（不限学科）:
-      科学发现方法与科学计算: ["scientific discovery", "physical law", "symbolic formula", "scientific machine learning", "physics-informed", "physics-inspired"]
+    量子与凝聚态:
+      量子与凝聚态: [quantum, "condensed matter", superconduct, "many-body", "spin system", "phase transition"]
+    光学与光子:
+      光学与光子: [photonic, metasurface, "optical design", nanophotonic, laser]
+    生命科学与医学:
+      生命科学与医学: [protein, antibod, nanobod, enzyme, peptide, binder, "rna design", aptamer, "nucleic acid", "drug discovery", "drug design", "small molecule", "small-molecule", ligand, "virtual screening", admet, "drug-target", "lead optimization", "protein-ligand", "molecular generation", "molecule generation", "molecular design", "molecule design", "de novo molecular", "molecular property", "molecular conformation", conformer, "molecular graph", "3d molecule", "equivariant diffusion", "molecular representation", "molecular dynamics", "single-cell", "single cell", scrna, "virtual cell", perturbation, "spatial transcriptom", "cell atlas", "cell type", "gene regulatory", tumor, tumour, cancer, oncolog, immun, "t cell", "t-cell", tcr, neoantigen, "multi-omic", multiomic, proteomic, transcriptom, genomic, "gene expression", "spatial omics", clinical, patient, medical, "medical diagnos", "disease diagnos", "clinical diagnos", "cancer diagnos", "medical imag", ehr, hospital, "electronic health", radiolog, patholog, disease]
+    化学与材料:
+      化学与材料: ["thin film", perovskite, semiconductor, "device fabrication", polymer, batter, electrolyte, electrocataly, photocataly, "heterogeneous cataly", "solar cell", "hydrogen evolution", "co2 reduction", "self-driving lab", "autonomous lab", "materials synthesis", "materials discovery", "crystal structure", "density functional", dft, "interatomic potential", "materials design", "inorganic material", "crystal structure prediction", retrosynthe, "chemical reaction", "reaction prediction", "organic synthesis", "chemical synthesis", "chemical language model", "chemistry large language model", "large language models for chemistry", "llm for chemistry", "llms for chemistry", "materials foundation model", "chemistry foundation model", "chemical knowledge", "materials science large language model"]
+
+  # 大类 → 领域
+  groups:
+    AI研究者: [RSI与自进化, AI for AI, 智能体与推理, 可信与安全, 多模态·生成·世界模型, 科学智能体与基础模型, 具身智能, 图学习·数据与系统]
+    科学家: [地球与气候, 空间与等离子体物理, 天文与宇宙学, 量子与凝聚态, 光学与光子, 生命科学与医学, 化学与材料]
+  # 「AI研究者」方向的标签只在论文不属于任何科学学科时才记（科学学科优先）；
+  #   例外：科学智能体与基础模型 —— 做科学大模型 / AI 科学家的论文，即使提到具体学科也记这一项
+  ai_only_tops: [RSI与自进化, AI for AI, 智能体与推理, 可信与安全, 多模态·生成·世界模型, 具身智能, 图学习·数据与系统]
+  always_tag: [科学智能体与基础模型]
+  # 只被 AI 方向检索抓到的论文：摘要里普遍有 benchmark/evaluation 等泛词，要求标题命中或摘要命中 2 个不同关键词才算该领域
+  strict_min_score: 2
+  # AI 方向抓来、但哪个领域都没命中的论文：false = 不进人才库（人才树之外的 AI 应用研究）；true = 保留并记为「未归类」
+  keep_unclassified: false
+  # 领域 ← 抓取用的检索领域：关键词一个都没命中时，按检索来源归类（列表里第一个为默认）
+  fetch_alias:
+    RSI与自进化: [大模型训练与自进化, 模型架构与基础模型, 推理与对齐]
+    智能体与推理: [智能体与工具链, 代码与软件智能体, AI for Math, 推理与对齐]
+    多模态·生成·世界模型: [世界模型与空间智能, 生成模型与多模态]
+    科学智能体与基础模型: [科学发现方法与科学计算]
+    图学习·数据与系统: [数据合成与评测, AI系统与数据基础设施]
+    地球与气候: [气象气候, 地球物理]
+    空间与等离子体物理: [等离子体与空间物理]
+    生命科学与医学: [蛋白与核酸设计, 药物发现, 细胞与多组学, 分子与反应, 医学AI与临床]
+    化学与材料: [材料实验与器件, 能源与催化, 计算材料]
+  # 旧分类名 → 新分类名（以前在「人才画像」里人工修正过的领域会自动换成新名字）
+  renamed:
+    气象气候: 地球与气候
+    地球物理: 地球与气候
+    等离子体与空间物理: 空间与等离子体物理
+    AI for Math: 智能体与推理
+    科学发现方法与科学计算: 科学智能体与基础模型
+    预训练与模型架构: RSI与自进化
+    后训练与对齐: RSI与自进化
+    推理与思维链: 智能体与推理
+    智能体与工具: 智能体与推理
+    代码与软件智能体: 智能体与推理
+    多模态大模型: 多模态·生成·世界模型
+    生成模型与世界模型: 多模态·生成·世界模型
+    数据合成与评测: 图学习·数据与系统
+    AI系统与数据基础设施: 图学习·数据与系统
+    蛋白与核酸设计: 生命科学与医学
+    药物发现: 生命科学与医学
+    分子生成模型: 生命科学与医学
+    单细胞与虚拟细胞: 生命科学与医学
+    肿瘤免疫与多组学: 生命科学与医学
+    医学AI与临床: 生命科学与医学
+    细胞与多组学: 生命科学与医学
+    分子与反应: 生命科学与医学
+    材料与器件实验: 化学与材料
+    计算材料: 化学与材料
+    化学与材料大模型: 化学与材料
+    材料实验与器件: 化学与材料
+    能源与催化: 化学与材料
 
   # 维度2：AI方法（在 AI4S 中起什么作用）
   ai_methods:
@@ -248,6 +318,11 @@ taxonomy:
     method: 2
   # 第二多的类别达到最多类别的这个比例，才记为「副」标签
   secondary_min_share: 0.3
+  # 领域按「当前方向」定：论文按发表时间加权，每过 domain_half_life 年权重减半，取权重最高的方向
+  domain_half_life: 1.5
+  # 副领域只在特别明显时才写：加权后达到主方向的这个比例，且至少这么多篇
+  domain_secondary_share: 0.6
+  domain_secondary_min_papers: 3
 
   # 标签1：人才类型 S / A / A×S
   #   优先用作者整个学术生涯的主题分布（作者接口 topics）；没有时用其赛道论文的主题领域
@@ -273,67 +348,5 @@ taxonomy:
     - {name: 青年骨干, min_age: 5}
     - {name: 博士/博后, min_age: 0}
 
-  # 标签3、4：在软件「人才画像 → 跟进记录」里人工维护
-  relation_levels: ["L1 共研/论文合作", "L2 有接触", "L3 未接触"]
-  intent_levels: ["已创业", "有意向", "不确定"]
-
-# =====================================================================
-# 其他赛道：只写与上面默认赛道（AI4S）不同的部分，运行时叠加。
-#   运行：python3 run.py --track general_ai        结果在 output/app_data_general_ai/
-#   软件左上角可切换赛道；跟进记录、团队收藏、账号全赛道共享。
-# =====================================================================
-tracks:
-  general_ai:
-    track_name: "通用AI"
-    fetch:
-      # 领域词本身就是 AI 词，不再额外要求 AI 方法词
-      ai_clause: ""
-      domains:
-        大模型训练与自进化: '("large language model" OR "large language models" OR LLM OR LLMs) AND ("reinforcement learning" OR "post-training" OR RLHF OR "self-improvement" OR "self-improving" OR "self-evolving" OR "test-time scaling" OR "chain-of-thought" OR "scaling law")'
-        模型架构与基础模型: '("foundation model" OR "foundation models" OR "mixture of experts" OR "mixture-of-experts" OR "state space model" OR "Kolmogorov-Arnold" OR "model architecture" OR "multimodal large language model" OR "vision-language model" OR "graph neural network")'
-        世界模型与空间智能: '("world model" OR "world models" OR "spatial intelligence" OR "embodied agent" OR "embodied AI" OR "3D scene understanding" OR "video generation")'
-        数据合成与评测: '("synthetic data" OR "data synthesis" OR "data curation" OR "data selection" OR "data recipe" OR benchmark OR "evaluation") AND ("large language model" OR "large language models" OR LLM OR LLMs OR "foundation model")'
-        智能体与工具链: '("LLM agent" OR "LLM agents" OR "language agent" OR "AI agent" OR "multi-agent" OR "tool use" OR "tool learning" OR "agent memory" OR "long-term memory" OR "code generation" OR "GUI agent" OR "deep research")'
-        AI系统与数据基础设施: '("machine learning system" OR "LLM serving" OR "LLM inference" OR "inference acceleration" OR "distributed training" OR "AI for database" OR "vector database" OR "database tuning")'
-    classifier:
-      extra_ai_terms: [llm, llms, "foundation model", "world model", agent, agents, "multi-agent", pretrain, "post-training", rlhf, "mixture of experts", "vision-language", multimodal, "code generation", benchmark]
-    taxonomy:
-      science_domains:
-        通用AI:
-          大模型训练与自进化: ["post-training", rlhf, "reinforcement learning", "self-improv", "self-evolv", "test-time scaling", "chain-of-thought", "scaling law", reasoning]
-          模型架构与基础模型: ["foundation model", "mixture of experts", "mixture-of-experts", "state space model", "kolmogorov-arnold", "model architecture", "multimodal large language model", "vision-language model", "graph neural network", pretrain]
-          世界模型与空间智能: ["world model", "spatial intelligence", embodied, "3d scene", "video generation"]
-          数据合成与评测: ["synthetic data", "data synthesis", "data curation", "data selection", "data recipe", benchmark, evaluation]
-          智能体与工具链: ["llm agent", "language agent", "ai agent", "multi-agent", "tool use", "tool learning", "agent memory", "long-term memory", "code generation", "gui agent", "deep research", agentic]
-          AI系统与数据基础设施: ["machine learning system", "llm serving", "llm inference", "inference acceleration", "distributed training", "ai for database", "vector database", "database tuning"]
-    talent:
-      # 通用 AI 方向的「创始人工厂」型机构（名称包含匹配）
-      feeder_institutions:
-        - Shanghai Artificial Intelligence Laboratory
-        - Shanghai Qi Zhi Institute
-        - Beijing Academy of Artificial Intelligence
-        - SenseTime
-        - Microsoft Research
-        - ByteDance
-        - Alibaba Group
-        - Tencent
-        - Baidu
-        - Moonshot
-        - Zhipu
-        - MiniMax
-        - DeepSeek
-        - Google
-        - DeepMind
-        - OpenAI
-        - Anthropic
-        - Meta (United States)
-        - NVIDIA
-        - Tsinghua University
-        - Peking University
-        - Shanghai Jiao Tong University
-        - Fudan University
-        - Chinese University of Hong Kong
-        - Stanford University
-        - Massachusetts Institute of Technology
-        - Carnegie Mellon University
-        - University of California, Berkeley
+  # 标签3：关系（已建联 / 未建联），在软件「人才画像 → 跟进记录」里人工维护
+  relation_levels: ["已建联", "未建联"]

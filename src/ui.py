@@ -9,6 +9,7 @@ import json
 import math
 import random
 from datetime import datetime
+from pathlib import Path
 
 import pandas as pd
 import plotly.express as px
@@ -313,3 +314,27 @@ def globe(df, left: list[tuple[str, str, str]], right: list[tuple[str, str, str]
 
 def now_text(ts: float | None) -> str:
     return datetime.fromtimestamp(ts).strftime("%m-%d %H:%M") if ts else "—"
+
+
+# ------------------------------------------------------------------ 点名字打开的名单表格
+_DBL = components.declare_component("dbl_table", path=str(Path(__file__).parent / "dbltable"))
+
+
+def col(key: str, label: str | None = None, type: str = "text", wide: bool = False, **opts) -> dict:
+    """表格列：type = text / bar（0–100 进度条）/ num / link；wide=True 给长文本更宽的列。"""
+    return {"key": key, "label": label or key, "type": type, "wide": wide, **opts}
+
+
+def dbl_table(df: pd.DataFrame, columns: list[dict], key: str, id_col: str = "author_id", name_col: str = "姓名",
+              height: int | None = None, empty: str = "没有符合条件的人") -> str | None:
+    """名单表格：点名字返回这一行的作者号，否则返回 None。点表头排序。"""
+    cols = [c for c in columns if c and c["key"] in df.columns]
+    keep = list(dict.fromkeys([c["key"] for c in cols] + [id_col]))
+    rows = json.loads(df[keep].to_json(orient="records", force_ascii=False)) if len(df) else []
+    h = height or min(650, 40 + 33 * max(1, len(rows)))
+    v = _DBL(rows=rows, columns=cols, id_col=id_col, name_col=name_col, height=h, empty=empty, key=key, default=None)
+    seen = f"{key}__seen"
+    if isinstance(v, dict) and v.get("id") and v.get("t") != st.session_state.get(seen):
+        st.session_state[seen] = v.get("t")      # 同一次点击只处理一次（组件的值在重新运行后仍会保留）
+        return v["id"]
+    return None

@@ -23,10 +23,9 @@ from src import s2
 from src import tracks
 from src import taxonomy as tx
 from src.rising import domain_ranking, score_rising
-from src.venture import QUADRANTS, score_venture
 from src.classify import abstract_from_inverted, classify_work, hits
 from src.openalex_client import BudgetExhausted, OpenAlex, dump_jsonl, load_jsonl
-from src.talent import build_author_table, enrich_with_author_profiles, institution_table, score
+from src.talent import apply_recent_papers, build_author_table, enrich_with_author_profiles, institution_table, score
 
 ROOT = Path(__file__).parent
 DATA = ROOT / "data"
@@ -146,6 +145,10 @@ def domain_growth(cfg: dict, allow_api: bool, refresh: bool) -> dict[str, float]
         if c:   # 今年还没过完，用「去年 + 前年」对比「再往前两年」
             recent, prev = c.get(y - 1, 0) + c.get(y - 2, 0), c.get(y - 3, 0) + c.get(y - 4, 0)
             out[d] = round((recent + 1) / (prev + 1) - 1, 3)
+    for sub, src in ((cfg.get("taxonomy") or {}).get("fetch_alias") or {}).items():   # 二级领域名和检索领域名不同时
+        vals = [out[x] for x in ([src] if isinstance(src, str) else src) if x in out]
+        if vals and sub not in out:
+            out[sub] = round(sum(vals) / len(vals), 3)
     return out
 
 
@@ -255,8 +258,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--skip-fetch", action="store_true", help="不调 API，只用缓存数据重算")
     ap.add_argument("--quick", action="store_true", help="试跑：每个领域 200 篇，单独缓存")
-    ap.add_argument("--domains", default="", help="只抓这些领域，逗号分隔")
-    ap.add_argument("--refresh", default="", help="重新抓取：all 或逗号分隔的领域名")
+    ap.add_argument("--domains", default="", help="只抓这些领域，逗号分隔；science=全部科学领域，ai=全部通用 AI 方向")
+    ap.add_argument("--refresh", default="", help="重新抓取：all、science、ai 或逗号分隔的领域名")
     ap.add_argument("--no-enrich", action="store_true", help="跳过作者详情补全")
     ap.add_argument("--refetch-profiles", action="store_true", help="重新拉取全部作者履历（含研究主题分布）")
     ap.add_argument("--no-s2", action="store_true", help="不使用 Semantic Scholar 补充数据")
@@ -271,12 +274,15 @@ def main():
     tax = cfg.get("taxonomy")
     split = lambda s: [x.strip() for x in s.replace("，", ",").split(",") if x.strip()]
     only, refresh = split(args.domains), split(args.refresh)
+    groups = {"science": [d for d in cfg["fetch"]["domains"] if not tracks.is_ai_domain(cfg["fetch"], d)],
+              "ai": [d for d in cfg["fetch"]["domains"] if tracks.is_ai_domain(cfg["fetch"], d)]}
+    expand = lambda xs: list(dict.fromkeys(y for x in xs for y in groups.get(x, [x])))
+    only, refresh = expand(only), expand(refresh)    # science = 全部科学领域，ai = 全部通用 AI 方向
     unknown = [d for d in only + refresh if d != "all" and d not in cfg["fetch"]["domains"]]
     if unknown:
         raise SystemExit(f"未知领域：{unknown}。可选：{list(cfg['fetch']['domains'])}")
 
     pending = [] if args.skip_fetch else fetch_all(cfg, args.quick, only, refresh)
-    growth = domain_growth(cfg, allow_api=not args.skip_fetch, refresh=bool(refresh))
     works = load_works(cfg, args.quick)
     done = {d for w in works for d in w.get("_fetch_domains", [])}
     print(f"[数据] {len(works)} 篇论文，覆盖 {len(done)}/{len(cfg['fetch']['domains'])} 个领域")
@@ -294,14 +300,13 @@ def main():
         lab = classify_work(w, cfg["classifier"])
         field = ((w.get("primary_topic") or {}).get("field") or {}).get("display_name")
         venue = ((w.get("primary_location") or {}).get("source") or {}).get("display_name")
+        seeds = w.get("_fetch_domains") or []
+        ai_only = bool(seeds) and all(tracks.is_ai_domain(cfg["fetch"], d) for d in seeds)   # 只被通用 AI 方向的检索抓到
         lab.update(tx.tag_work(w.get("title"), w.get("abstract") or abstract_from_inverted(w.get("abstract_inverted_index")),
-                               field, tax, venue, seed_domains=w.get("_fetch_domains")))
-        lab["relevant"] = bool(lab["ai_hits"]) and bool(lab["科学领域"])
-        if lab["relevant"]:
-            text = f"{w.get('title') or ''} {w.get('abstract') or abstract_from_inverted(w.get('abstract_inverted_index'))}".lower()
-            vc = cfg.get("venture") or {}
-            lab["创业标签"] = {k: bool(hits(text, vc.get(f"{t}_terms", [])))
-                             for k, t in (("系统", "system"), ("验证", "validation"), ("壁垒", "moat"))}
+                               field, tax, venue, seed_domains=seeds, strict=ai_only))
+        # 必须属于某个领域；通用 AI 方向抓到、但哪个领域都没命中的论文也保留（keep_unclassified），记为「未归类」
+        in_scope = bool(lab["科学领域"]) or (bool(tax.get("keep_unclassified")) and ai_only)
+        lab["relevant"] = bool(lab["ai_hits"]) and in_scope
         labels[_short(w["id"])] = lab
         if lab["relevant"]:
             kept.append(w)
@@ -334,19 +339,18 @@ def main():
                     .head(rs.get("enrich_candidates", 3000))["author_id"].tolist())
             wanted = [a for a in dict.fromkeys(pre.head(tcfg["top_n_enrich"])["author_id"].tolist() + cand)
                       if str(a).startswith("S2-")]
-            profiles += s2.author_profiles(cfg, people, wanted, allow_api=not args.skip_fetch)
+            everyone = [a for a in authors["author_id"] if str(a).startswith("S2-")]
+            profiles += s2.author_profiles(cfg, people, everyone, allow_api=not args.skip_fetch, years_for=wanted)
+            if tax:   # 「当前方向」：再看这些人最近两年的全部论文（不限于人才库的检索范围）
+                recent = s2.recent_papers(cfg, people, everyone, allow_api=not args.skip_fetch)   # 人才库里所有人
+                authors = apply_recent_papers(authors, recent, tax)
+                print(f"[当前方向] {len(recent)} 位作者用最近两年的全部论文校正了细分领域")
         authors = enrich_with_author_profiles(authors, profiles, tax)
 
+    authors = authors.drop(columns=[c for c in ["_dw", "_dr", "_tn"] if c in authors])
     ranked = score(authors, tcfg, tax)
     ranked = score_rising(ranked, cfg.get("rising_star"), tcfg["recent_years"])
-    print(f"[新星] {int(ranked['新星资格'].sum())} 位学术新星进入分领域创业潜力榜")
-    prev_path = APP_DIR / "talents.csv"
-    prev = pd.read_csv(prev_path, usecols=lambda c: c in {"author_id", "信号清单", "成熟度分", "潜力分"}) \
-        if prev_path.exists() else None
-    ranked = score_venture(ranked, cfg.get("venture"), growth, prev)
-    q = ranked["创业象限"].value_counts()
-    print(f"[创业雷达] 「{QUADRANTS[0]}」{int(q.get(QUADRANTS[0], 0))} 人；本次新出现信号的 "
-          f"{int((ranked['新增信号'].fillna('') != '').sum())} 人")
+    print(f"[新星] {int(ranked['新星资格'].sum())} 位学术新星进入分领域新星榜")
     insts = institution_table(kept)
     countries = (ranked.groupby("国家/地区")
                  .agg(人才数=("author_id", "size"), 综合分均值=("综合分", "mean"),
@@ -358,9 +362,7 @@ def main():
         "被引": w.get("cited_by_count"), "DOI": w.get("doi"),
         "期刊/平台": ((w.get("primary_location") or {}).get("source") or {}).get("display_name"),
         "置信度": labels[w["id"].rsplit("/", 1)[-1]]["confidence"],
-        "子方向": "、".join(labels[w["id"].rsplit("/", 1)[-1]]["subtopics"]),
         "科学领域": "、".join(labels[w["id"].rsplit("/", 1)[-1]].get("科学领域", [])),
-        "AI方法": "、".join(labels[w["id"].rsplit("/", 1)[-1]].get("AI方法", [])),
         "同年同领域被引百分位": labels[w["id"].rsplit("/", 1)[-1]].get("被引百分位"),
         "抓取来源领域": "、".join(w.get("_fetch_domains", [])),
         "OpenAlex": w["id"],
@@ -370,41 +372,33 @@ def main():
     OUT.mkdir(exist_ok=True)
     safe = cfg["track_name"].replace("/", "-")
     path = OUT / f"人才线索_{safe}_{date.today():%Y%m%d}.xlsx"
-    lead_cols = ["综合分", "姓名", "人才类型", "层级", "一级学科", "主学科", "副学科", "主方法", "副方法",
-                 "推荐理由", "当前机构", "国家/地区", "职业阶段", "主要方向",
-                 "学术实力分", "增长势头分", "创业信号分", "赛道论文数", "近期论文数",
-                 "赛道总被引", "h指数", "末位作者数", "产业合作论文占比", "出身创始人工厂",
+    lead_cols = ["综合分", "姓名", "大类", "层级", "主学科", "副学科",
+                 "推荐理由", "当前机构", "国家/地区", "职业阶段",
+                 "学术实力分", "增长势头分", "赛道论文数", "近期论文数",
+                 "赛道总被引", "h指数", "末位作者数",
                  "最近加入机构", "最近加入年份", "完整机构履历", "常合作者",
                  "代表作", "代表作被引", "ORCID", "author_id"]
     lead_cols = [c for c in lead_cols if c in ranked.columns]
-    star_cols = ["一级学科", "主学科", "领域排名", "新星分", "姓名", "新星理由", "当前机构", "国家/地区",
-                 "学术年龄", "层级", "人才类型", "主方法", "影响力分", "势头分", "独立性分", "创业信号分",
+    star_cols = ["大类", "主学科", "领域排名", "新星分", "姓名", "新星理由", "当前机构", "国家/地区",
+                 "学术年龄", "层级", "影响力分", "势头分", "独立性分",
                  "近期论文数", "近期末位或通讯数", "近期第一作者数", "影响力百分位", "近期最佳论文",
                  "最近加入机构", "最近加入年份", "ORCID", "author_id"]
     stars = domain_ranking(ranked, "主学科", (cfg.get("rising_star") or {}).get("top_n_per_domain", 30))
     if tax:   # 按分类体系里的领域顺序排列
         order = {d: i for i, d in enumerate(tx.domain_order(tax))}
         stars = stars.sort_values(["主学科", "领域排名"], key=lambda s: s.map(order) if s.name == "主学科" else s)
-    radar_cols = ["创业象限", "成熟度分", "潜力分", "姓名", "关键信号", "当前机构", "国家/地区", "主学科", "学术年龄",
-                  "职业转折", "独立带队", "核心团队", "产业合作上升", "系统化产出",
-                  "成果质量", "离产品距离", "赛道窗口期", "技术壁垒", "新增信号", "信号清单", "ORCID", "author_id"]
-    radar = ranked[ranked["创业象限"].fillna("") != ""].copy()
-    radar["_q"] = radar["创业象限"].map({k: i for i, k in enumerate(QUADRANTS)})
-    radar = radar.sort_values(["_q", "成熟度分"], ascending=[True, False])
     with pd.ExcelWriter(path, engine="openpyxl") as xw:
-        radar[[c for c in radar_cols if c in radar]].to_excel(xw, sheet_name="创业雷达", index=False)
-        stars[[c for c in star_cols if c in stars]].to_excel(xw, sheet_name="新星榜", index=False)
-        ranked[lead_cols].to_excel(xw, sheet_name="人才线索榜", index=False)
+        xl = {"主学科": "领域", "副学科": "副领域"}
+        stars[[c for c in star_cols if c in stars]].rename(columns=xl).to_excel(xw, sheet_name="新星榜", index=False)
+        ranked[lead_cols].rename(columns=xl).to_excel(xw, sheet_name="人才线索榜", index=False)
         insts.head(500).to_excel(xw, sheet_name="机构榜", index=False)
         countries.to_excel(xw, sheet_name="国家分布", index=False)
         papers.to_excel(xw, sheet_name="赛道论文", index=False)
         if tax:
-            for name, kw in [("分类矩阵_人数", {}), ("分类矩阵_交叉型", {"value": "交叉型人数"})]:
-                tx.matrix(ranked, tax, **kw).to_excel(xw, sheet_name=name, index_label="AI方法 \\ 科学领域")
-            pd.crosstab(ranked["层级"], ranked["人才类型"], margins=True, margins_name="合计") \
-                .to_excel(xw, sheet_name="类型×层级")
+            pd.crosstab(ranked["层级"], ranked["大类"], margins=True, margins_name="合计") \
+                .to_excel(xw, sheet_name="大类×层级")
         for ws in xw.book.worksheets:
-            ws.freeze_panes = {"人才线索榜": "C2", "新星榜": "F2", "创业雷达": "E2"}.get(ws.title, "A2")
+            ws.freeze_panes = {"人才线索榜": "C2", "新星榜": "F2"}.get(ws.title, "A2")
             for col in ws.columns:
                 width = max(len(str(c.value or "")) for c in list(col)[:50])
                 ws.column_dimensions[col[0].column_letter].width = min(max(8, width * 1.1), 50)

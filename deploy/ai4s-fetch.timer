@@ -1,5 +1,5 @@
 [Unit]
-Description=每周一凌晨 3:30（北京时间）更新 AI4S 人才数据
+Description=每周一凌晨 3:30（北京时间）更新科学领域（AI4S）数据
 
 [Timer]
 OnCalendar=Mon *-*-* 03:30:00 Asia/Shanghai

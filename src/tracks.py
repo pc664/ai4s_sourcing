@@ -3,7 +3,7 @@
 config.yaml 顶层是默认赛道（AI4S）的配置；tracks 段里的其他赛道只写「与默认不同的部分」，
 运行时叠加到默认配置上：
     - 字典逐层合并，列表和其他值整体替换；
-    - taxonomy.science_domains（领域划分）整体替换；
+    - taxonomy.science_domains（领域划分）和 taxonomy.ai_methods（第二维度）整体替换；
     - classifier.extra_ai_terms 追加到 AI 方法词后面。
 每个赛道的结果单独存放（output/app_data_<赛道>/），跟进记录、团队收藏、账号全赛道共享。
 """
@@ -13,12 +13,13 @@ import copy
 from pathlib import Path
 
 DEFAULT = "ai4s"
+WHOLE = {"science_domains", "ai_methods"}   # 这些字段整体替换，不和默认赛道合并
 
 
 def _merge(base: dict, over: dict) -> dict:
     out = copy.deepcopy(base)
     for k, v in (over or {}).items():
-        if isinstance(v, dict) and isinstance(out.get(k), dict) and k != "science_domains":
+        if isinstance(v, dict) and isinstance(out.get(k), dict) and k not in WHOLE:
             out[k] = _merge(out[k], v)
         else:
             out[k] = copy.deepcopy(v)
@@ -59,6 +60,11 @@ def app_dir(root: Path, track: str | None) -> Path:
 
 
 def query(fc: dict, domain: str) -> str:
-    """领域检索式；赛道的 ai_clause 为空时只用领域检索式本身（通用 AI 赛道的领域词本身就是 AI 词）。"""
-    clause = fc.get("ai_clause") or ""
+    """领域检索式；ai_clause 为空、或该领域在 no_ai_clause 里（通用 AI 方向）时只用领域检索式本身。"""
+    clause = "" if domain in (fc.get("no_ai_clause") or []) else (fc.get("ai_clause") or "")
     return f"{fc['domains'][domain]} AND {clause}" if clause.strip() else fc["domains"][domain]
+
+
+def is_ai_domain(fc: dict, domain: str) -> bool:
+    """AI 方向的检索领域：检索式不拼接 ai_clause 的（no_ai_clause），以及 ai_side 列出的。"""
+    return domain in (fc.get("no_ai_clause") or []) or domain in (fc.get("ai_side") or [])

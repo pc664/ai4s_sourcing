@@ -14,12 +14,45 @@ from src.classify import hits
 
 UNCLASSIFIED = "未归类"
 TALENT_TYPES = ["A×S 交叉型", "A AI研究者", "S 科学家"]
+SECTOR_TYPES = ["学研双栖", "产业研究者", "学界研究者"]   # 通用 AI 赛道：人人都是 AI 研究者，改按学界/产业划分
+DEFAULT_LABELS = {"group": "大类", "top": "一级学科", "domain": "科学领域", "method": "AI方法"}
+
+
+def labels(tax: dict) -> dict[str, str]:
+    """各维度在界面上的显示名（AI4S：一级学科 / 科学领域 / AI方法；通用 AI：一级方向 / 研究方向 / 贡献形态）。"""
+    return {**DEFAULT_LABELS, **(tax.get("labels") or {})}
+
+
+def talent_types(tax: dict) -> list[str]:
+    """人才类型的可选值，第一个是「交叉/双栖」型。"""
+    return SECTOR_TYPES if (tax.get("talent_type") or {}).get("mode") == "sector" else TALENT_TYPES
+
+
+def sector_type(inst_type, join_type, ind_share, cfg: dict) -> str:
+    """学界 / 产业 / 学研双栖：当前在企业 → 产业研究者；在学界但产业合作多或近期加入企业 → 学研双栖。"""
+    if str(inst_type or "") == "company":
+        return SECTOR_TYPES[1]
+    share = 0 if ind_share is None or pd.isna(ind_share) else ind_share
+    if share >= cfg.get("sector_min_share", 0.3) or str(join_type or "") == "company":
+        return SECTOR_TYPES[0]
+    return SECTOR_TYPES[2]
 
 
 # ------------------------------------------------------------------ 结构
 def domain_parent(tax: dict) -> dict[str, str]:
     """二级学科 → 一级学科。"""
     return {sub: top for top, subs in tax["science_domains"].items() for sub in subs}
+
+
+def domain_group(tax: dict) -> dict[str, str]:
+    """领域（一级）→ 大类。"""
+    return {top: g for g, tops in (tax.get("groups") or {}).items() for top in tops}
+
+
+def sub_group(tax: dict) -> dict[str, str]:
+    """细分领域（二级）→ 大类。"""
+    dg = domain_group(tax)
+    return {sub: dg.get(top, UNCLASSIFIED) for sub, top in domain_parent(tax).items()}
 
 
 def domain_order(tax: dict) -> list[str]:
@@ -41,15 +74,55 @@ def _scored(title: str, text: str, groups: dict[str, list[str]], min_score: int,
     return [n for _, n in sorted(out, key=lambda x: -x[0])]
 
 
+def _kw_scores(title: str, text: str, groups: dict[str, list[str]]) -> dict[str, int]:
+    return {name: 3 * len(hits(title, kws)) + len(hits(text, kws)) for name, kws in groups.items()}
+
+
+def seed_subs(tax: dict, seed_domains: list[str] | None) -> list[str]:
+    """论文的检索来源 → 对应的细分领域（同名的，或 fetch_alias 里列出的）。"""
+    seeds = list(seed_domains or [])
+    subs = set(domain_order(tax))
+    out = [d for d in seeds if d in subs]
+    for sub, src in (tax.get("fetch_alias") or {}).items():
+        src = [src] if isinstance(src, str) else src
+        if any(d in src for d in seeds):
+            out.append(sub)
+    return list(dict.fromkeys(out))
+
+
 def tag_work(title: str, abstract: str, primary_field: str | None, tax: dict,
-             venue: str | None = None, seed_domains: list[str] | None = None) -> dict:
-    """seed_domains：这篇论文是按哪些领域的检索式抓到的，给这些领域各加 1 分。"""
+             venue: str | None = None, seed_domains: list[str] | None = None, strict: bool = False) -> dict:
+    """给一篇论文打细分领域标签。
+    - 科学学科优先：命中科学学科的论文不再记 ai_only_tops 里的 AI 方向（always_tag 里的除外）；
+    - 关键词决定标签；科学学科一个关键词都没命中时，按检索来源归类（AI4S 检索抓到的论文一定属于其学科）；
+    - strict：论文只来自 AI 方向的检索，科学学科的门槛提高到 strict_min_score，避免顺带提到的词把它拉进科学学科；
+      AI 方向同样要求 strict_min_score，达不到时只有「关键词命中过 1 次、且是检索来源对应的方向」才按来源归类，否则记未归类。"""
     title, abstract = (title or "").lower(), (abstract or "").lower()
     text = f"{title} {abstract}"
     subs = {sub: kws for subs in tax["science_domains"].values() for sub, kws in subs.items()}
     ms = tax.get("min_score", {})
-    domains = _scored(title, text, subs, ms.get("science", 1), {d: 1 for d in seed_domains or []})
-    methods = _scored(title, text, tax["ai_methods"], ms.get("method", 2))
+    parent = domain_parent(tax)
+    ai_tops = set(tax.get("ai_only_tops") or [])
+    always = set(tax.get("always_tag") or [])
+    hard = tax.get("strict_min_score", 2)
+    sc = _kw_scores(title, text, subs)
+    seeds = seed_subs(tax, seed_domains)
+    rank = lambda xs: sorted(xs, key=lambda k: -sc[k])
+
+    sci_min = max(ms.get("science", 1), hard) if strict else ms.get("science", 1)
+    sci_subs = [k for k in subs if parent[k] not in ai_tops and k not in always]
+    sci = rank([k for k in sci_subs if sc[k] >= sci_min])
+    if not sci and not strict:            # 科学学科检索抓到、但关键词没命中：归到检索的学科
+        sci = [k for k in seeds if k in sci_subs][:1]
+    keep = rank([k for k in always if sc[k] >= hard])
+    if not sci:
+        gen = rank([k for k in subs if parent[k] in ai_tops and sc[k] >= hard])
+        if not gen:
+            gen = [k for k in seeds if (parent[k] in ai_tops or k in always) and sc[k] >= 1][:1]
+        keep = list(dict.fromkeys(keep + gen))
+    domains = list(dict.fromkeys(sci + keep))
+    methods = [n for n, v in sorted(_kw_scores(title, text, tax["ai_methods"]).items(), key=lambda x: -x[1])
+               if v >= ms.get("method", 2)]
     return {
         "科学领域": domains,
         "AI方法": methods or [tax["ai_method_fallback"]],
@@ -73,6 +146,23 @@ def main_and_secondary(counter: Counter, order: list[str], share: float) -> tupl
     items = sorted(counter.items(), key=lambda kv: (-kv[1], rank.get(kv[0], 999)))
     main = items[0][0]
     sec = items[1][0] if len(items) > 1 and items[1][1] >= max(1, share * items[0][1]) else ""
+    return main, sec
+
+
+def current_main_and_secondary(weighted: Counter, raw: Counter, order: list[str],
+                               sec_share: float = 0.6, sec_min_papers: int = 3) -> tuple[str, str]:
+    """按「当前方向」定主细分领域：论文按发表时间加权（越新权重越大），取权重最高的方向。
+    副细分领域只在特别明显时才记：加权后达到主方向的 sec_share，且至少 sec_min_papers 篇。"""
+    if not weighted:
+        return UNCLASSIFIED, ""
+    rank = {k: i for i, k in enumerate(order)}
+    items = sorted(weighted.items(), key=lambda kv: (-kv[1], rank.get(kv[0], 999)))
+    main = items[0][0]
+    sec = ""
+    if len(items) > 1:
+        k, v = items[1]
+        if v >= sec_share * items[0][1] and raw.get(k, 0) >= sec_min_papers:
+            sec = k
     return main, sec
 
 
@@ -122,7 +212,7 @@ def matrix(df: pd.DataFrame, tax: dict, level: str = "二级", value: str = "人
     if value == "高潜人数":
         d = d[d["综合分"] >= 70]
     elif value == "交叉型人数":
-        d = d[d["人才类型"] == "A×S 交叉型"]
+        d = d[d["人才类型"] == talent_types(tax)[0]]
     elif value == "已接触人数":
         d = d[d["关系强度"].astype(str).str.startswith(("L1", "L2"))] if "关系强度" in d else d.iloc[0:0]
     if d.empty:

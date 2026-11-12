@@ -108,7 +108,7 @@ sudo -u ai4s .venv/bin/python run.py
 | 看软件是否在运行 | `systemctl status ai4s` |
 | 看软件日志 | `journalctl -u ai4s -n 100` |
 | 重启软件 | `sudo systemctl restart ai4s` |
-| 立即更新一次数据 | AI4S：`sudo systemctl start ai4s-fetch`；通用AI：`sudo systemctl start ai4s-fetch-general` |
+| 立即更新一次数据 | 科学领域：`sudo systemctl start ai4s-fetch`；通用 AI 方向：`sudo systemctl start ai4s-fetch-general` |
 | 看数据更新进度和日志 | `journalctl -u ai4s-fetch -f` |
 | 看下次自动任务的时间 | `systemctl list-timers 'ai4s*'` |
 | 立即备份一次 | `sudo systemctl start ai4s-backup` |
