@@ -21,7 +21,7 @@ DB_PATH = Path(os.environ.get("AI4S_DB") or ROOT / "team.db")
 
 OVERRIDABLE = ["人才类型", "层级", "主学科", "主方法"]
 CRM_FIELDS = (["状态", "关系强度", "转化意向", "核实状态"]
-              + [f"{c}(人工)" for c in OVERRIDABLE] + ["负责人", "备注"])
+              + [f"{c}(人工)" for c in OVERRIDABLE] + ["负责人", "人才特征", "备注"])
 CRM_COLS = ["author_id", "姓名"] + CRM_FIELDS + ["更新人", "更新时间"]
 
 ROLES = {"admin": "管理员", "editor": "编辑", "viewer": "只读"}
@@ -57,6 +57,14 @@ def connect(path: Path | None = None):
 def _init(con: sqlite3.Connection):
     cols = ", ".join(f"{_q(c)} TEXT DEFAULT ''" for c in CRM_COLS[1:])
     con.execute(f"CREATE TABLE IF NOT EXISTS crm (author_id TEXT PRIMARY KEY, {cols}, 版本 INTEGER DEFAULT 0)")
+    have = {r[1] for r in con.execute("PRAGMA table_info(crm)")}
+    if "人才亮点" in have and "人才特征" not in have:     # 字段改名：人才亮点 → 人才特征（保留已填的内容）
+        con.execute('ALTER TABLE crm RENAME COLUMN "人才亮点" TO "人才特征"')
+        con.execute("UPDATE crm_log SET 字段='人才特征' WHERE 字段='人才亮点'")
+        have = {r[1] for r in con.execute("PRAGMA table_info(crm)")}
+    for c in CRM_COLS[1:]:          # 旧数据库补上新加的字段（如「人才特征」）
+        if c not in have:
+            con.execute(f"ALTER TABLE crm ADD COLUMN {_q(c)} TEXT DEFAULT ''")
     con.execute("""CREATE TABLE IF NOT EXISTS crm_log (
         id INTEGER PRIMARY KEY AUTOINCREMENT, author_id TEXT, 姓名 TEXT,
         字段 TEXT, 旧值 TEXT, 新值 TEXT, 修改人 TEXT, 时间 TEXT)""")

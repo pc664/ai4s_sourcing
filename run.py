@@ -22,7 +22,6 @@ import yaml
 from src import s2
 from src import tracks
 from src import taxonomy as tx
-from src.rising import domain_ranking, score_rising
 from src.classify import abstract_from_inverted, classify_work, hits
 from src.openalex_client import BudgetExhausted, OpenAlex, dump_jsonl, load_jsonl
 from src.talent import apply_recent_papers, build_author_table, enrich_with_author_profiles, institution_table, score
@@ -233,11 +232,10 @@ def enrich(cfg: dict, authors: pd.DataFrame, tcfg: dict, allow_api: bool, refetc
     cache = {_short(p["id"]): p for p in load_jsonl(PROFILES)} if PROFILES.exists() else {}
     if allow_api or refetch:
         top = score(authors, tcfg).head(tcfg["top_n_enrich"])["author_id"].tolist()
-        # 新星候选也补全履历（学术年龄、h 指数要靠履历才准），按主导论文影响力取前 N 位
-        rs = cfg.get("rising_star") or {}
-        cand = (authors[authors["近期论文数"] >= rs.get("min_recent_papers", 2)]
+        # 近期主导论文影响力高的人也补全履历（学术年龄、h 指数要靠履历才准）
+        cand = (authors[authors["近期论文数"] >= 2]
                 .sort_values(["影响力百分位", "近期末位或通讯数"], ascending=False)
-                .head(rs.get("enrich_candidates", 3000))["author_id"].tolist())
+                .head(tcfg.get("enrich_candidates", 3000))["author_id"].tolist())
         top = list(dict.fromkeys(top + cand))
         top = [a for a in top if not str(a).startswith("S2-")]   # S2 人员的履历由 Semantic Scholar 补全
         need = top if refetch else [a for a in top if a not in cache]
@@ -332,11 +330,10 @@ def main():
     if not args.no_enrich and len(authors):
         profiles = enrich(cfg, authors, tcfg, allow_api=not args.skip_fetch, refetch=args.refetch_profiles)
         if people:
-            rs = cfg.get("rising_star") or {}
             pre = score(authors, tcfg)
-            cand = (authors[authors["近期论文数"] >= rs.get("min_recent_papers", 2)]
+            cand = (authors[authors["近期论文数"] >= 2]
                     .sort_values(["影响力百分位", "近期末位或通讯数"], ascending=False)
-                    .head(rs.get("enrich_candidates", 3000))["author_id"].tolist())
+                    .head(tcfg.get("enrich_candidates", 3000))["author_id"].tolist())
             wanted = [a for a in dict.fromkeys(pre.head(tcfg["top_n_enrich"])["author_id"].tolist() + cand)
                       if str(a).startswith("S2-")]
             everyone = [a for a in authors["author_id"] if str(a).startswith("S2-")]
@@ -349,8 +346,6 @@ def main():
 
     authors = authors.drop(columns=[c for c in ["_dw", "_dr", "_tn"] if c in authors])
     ranked = score(authors, tcfg, tax)
-    ranked = score_rising(ranked, cfg.get("rising_star"), tcfg["recent_years"])
-    print(f"[新星] {int(ranked['新星资格'].sum())} 位学术新星进入分领域新星榜")
     insts = institution_table(kept)
     countries = (ranked.groupby("国家/地区")
                  .agg(人才数=("author_id", "size"), 综合分均值=("综合分", "mean"),
@@ -379,17 +374,8 @@ def main():
                  "最近加入机构", "最近加入年份", "完整机构履历", "常合作者",
                  "代表作", "代表作被引", "ORCID", "author_id"]
     lead_cols = [c for c in lead_cols if c in ranked.columns]
-    star_cols = ["大类", "主学科", "领域排名", "新星分", "姓名", "新星理由", "当前机构", "国家/地区",
-                 "学术年龄", "层级", "影响力分", "势头分", "独立性分",
-                 "近期论文数", "近期末位或通讯数", "近期第一作者数", "影响力百分位", "近期最佳论文",
-                 "最近加入机构", "最近加入年份", "ORCID", "author_id"]
-    stars = domain_ranking(ranked, "主学科", (cfg.get("rising_star") or {}).get("top_n_per_domain", 30))
-    if tax:   # 按分类体系里的领域顺序排列
-        order = {d: i for i, d in enumerate(tx.domain_order(tax))}
-        stars = stars.sort_values(["主学科", "领域排名"], key=lambda s: s.map(order) if s.name == "主学科" else s)
     with pd.ExcelWriter(path, engine="openpyxl") as xw:
         xl = {"主学科": "领域", "副学科": "副领域"}
-        stars[[c for c in star_cols if c in stars]].rename(columns=xl).to_excel(xw, sheet_name="新星榜", index=False)
         ranked[lead_cols].rename(columns=xl).to_excel(xw, sheet_name="人才线索榜", index=False)
         insts.head(500).to_excel(xw, sheet_name="机构榜", index=False)
         countries.to_excel(xw, sheet_name="国家分布", index=False)
@@ -398,7 +384,7 @@ def main():
             pd.crosstab(ranked["层级"], ranked["大类"], margins=True, margins_name="合计") \
                 .to_excel(xw, sheet_name="大类×层级")
         for ws in xw.book.worksheets:
-            ws.freeze_panes = {"人才线索榜": "C2", "新星榜": "F2"}.get(ws.title, "A2")
+            ws.freeze_panes = {"人才线索榜": "C2"}.get(ws.title, "A2")
             for col in ws.columns:
                 width = max(len(str(c.value or "")) for c in list(col)[:50])
                 ws.column_dimensions[col[0].column_letter].width = min(max(8, width * 1.1), 50)

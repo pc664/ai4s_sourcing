@@ -179,26 +179,8 @@ s2:
   newest: 1000
   newest_months: 6
 
-# =====================================================================
-# 学术新星榜（软件「🚀 新星榜」页、Excel「新星榜」表）
-# 资格：学术年龄 ≤ max_academic_age、不是 exclude_tiers 层级、近期 AI4S 论文 ≥ min_recent_papers、
-#       最近 active_within_years 年内仍有 AI4S 论文
-# 新星分：只在有资格的人之间比较，三项加权（权重会自动归一化）
-#   影响力  最好 3 篇论文在「同年同领域」里的被引百分位 + 近期被引（新论文只和同年论文比，不吃亏）
-#   势头    近期产出量与加速度
-#   独立性  近期末位/通讯作者论文数（正在成为独立 PI）+ 第一作者论文数
-# =====================================================================
-rising_star:
-  max_academic_age: 12
-  require_known_age: true     # 只收学术年龄有履历依据的人（否则资深学者刚转做 AI 会被误判为新人）
-  enrich_candidates: 3000     # 额外为这么多位新星候选补全履历（约 60 次请求，额度可忽略）
-  exclude_tiers: [领军]
-  min_recent_papers: 2
-  active_within_years: 1
-  weights: {影响力: 0.55, 势头: 0.20, 独立性: 0.25}   # 影响力权重最高：防止只靠发文数量冲榜
-  top_n_per_domain: 30        # Excel 里每个领域列出前多少名
-
 talent:
+  enrich_candidates: 3000   # 另外为近期主导论文影响力最高的这么多位补全履历（学术年龄、h 指数）
   recent_years: 2          # "近期"窗口
   min_track_papers: 2      # 进入人才库的最低赛道论文数
   top_n_enrich: 6000       # 对前 N 名作者调用作者接口补全职业信息（增量：已拉过的不重复拉）

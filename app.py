@@ -100,7 +100,7 @@ with st.sidebar:
         TRACK = tracks.DEFAULT
 if st.session_state.get("_last_track") != TRACK:   # 换赛道时清掉和上个赛道相关的页面状态
     for k in list(st.session_state.keys()):
-        if str(k).startswith(("star_", "radar_", "person_pick", "jump_", "net_", "co_", "fav_table", "fav_last_pick",
+        if str(k).startswith(("radar_", "person_pick", "jump_", "net_", "co_", "fav_table", "fav_last_pick",
                               "nav_history", "focus_author")):
             st.session_state.pop(k, None)
     st.session_state["_last_track"] = TRACK
@@ -223,6 +223,46 @@ def load_aliases() -> dict:
     return dict(zip(a["old_id"], a["new_id"]))
 
 
+def fav_excel(df: pd.DataFrame) -> bytes:
+    """收藏名单导出为 Excel：人才特征、代表论文两列加宽并自动换行，表头冻结。"""
+    import io
+    from openpyxl.styles import Alignment, Font
+    buf = io.BytesIO()
+    with pd.ExcelWriter(buf, engine="openpyxl") as xw:
+        df.to_excel(xw, sheet_name="人才收藏", index=False)
+        ws = xw.sheets["人才收藏"]
+        widths = {"姓名": 18, "当前机构": 32, "大类": 10, LBL["domain"]: 20, "人才特征": 60, "代表论文": 70}
+        for i, c in enumerate(df.columns, start=1):
+            letter = ws.cell(row=1, column=i).column_letter
+            ws.column_dimensions[letter].width = widths.get(c, 16)
+            ws.cell(row=1, column=i).font = Font(bold=True)
+            for row in ws.iter_rows(min_row=2, min_col=i, max_col=i):
+                row[0].alignment = Alignment(wrap_text=True, vertical="top")
+        ws.freeze_panes = "B2"
+    return buf.getvalue()
+
+
+def key_papers(aid: str, max_n: int = 3) -> str:
+    """代表论文：最能代表这个人学术成果的 1–3 篇。
+    按被引排序（本人第一 / 末位作者的论文优先，挂名在中间的打 6 折）；第一篇必选，
+    之后的论文被引要达到第一篇的 30% 才列；另外，近两年在同年同领域里被引居前 5% 的本人主导论文也会列上。"""
+    mine = A[A["author_id"] == aid][["work_id", "位置"]].drop_duplicates("work_id")
+    if mine.empty:
+        return ""
+    d = mine.merge(P[["work_id", "标题", "年份", "被引", "同年同领域被引百分位"]], on="work_id", how="left")
+    d["lead"] = d["位置"].isin(["first", "last"])
+    d["w"] = d["被引"].fillna(0) * d["lead"].map({True: 1.0, False: 0.6})
+    d = d.sort_values("w", ascending=False)
+    top = d.iloc[0]["w"]
+    pick = d[d["w"] >= 0.3 * top].head(max_n)
+    recent = d[(d["年份"] >= datetime.now().year - 1) & d["lead"] & (d["同年同领域被引百分位"] >= 95)
+               & ~d["work_id"].isin(pick["work_id"])]
+    if len(pick) < max_n and len(recent):
+        pick = pd.concat([pick, recent.head(max_n - len(pick))])
+    return "；".join(f"{r['标题']}（{int(r['年份'])}）" if pd.notna(r["年份"]) else str(r["标题"])
+                    for _, r in pick.iterrows() if isinstance(r["标题"], str))
+
+
 def apply_crm(t: pd.DataFrame, crm: pd.DataFrame) -> pd.DataFrame:
     """把跟进记录和人工修正合并进人才表：人工值优先，自动值保留在「xx(自动)」列。"""
     t = t.merge(crm.drop(columns=["姓名", "更新时间", "更新人", "版本"]), on="author_id", how="left")
@@ -269,7 +309,7 @@ if _alias:   # 以前按旧作者号记的跟进，对到新的人员号上（�
     crm = crm.sort_values("更新时间").drop_duplicates("author_id", keep="last")
 T = apply_crm(T, crm)
 
-# 团队收藏（全组共享，存在 team.db）
+# 人才收藏（全组共享，存在 team.db）
 FAV = store.list_favorites()
 if _alias and len(FAV):
     FAV["author_id"] = FAV["author_id"].map(lambda a: a if a in _ids else _alias.get(a, a))
@@ -288,14 +328,14 @@ def fav_widget(aid: str, name: str, key: str):
         label = "⭐ 已收藏"
         st.caption(f"{r['收藏人']} 于 {r['收藏时间'][:10]} 收藏")
     else:
-        label = "☆ 加入团队收藏"
+        label = "☆ 加入人才收藏"
     # 同名的人已经收藏过：多半是同一个人被拆成了多个档案，提醒一下，避免重复收藏
     same = FAV[(FAV["author_id"] != aid) & (FAV["姓名"].map(norm_name) == norm_name(name))] if not len(row) else FAV.iloc[0:0]
     if len(same):
-        label = "☆ 加入团队收藏（已有同名收藏）"
+        label = "☆ 加入人才收藏（已有同名收藏）"
     with st.popover(label, disabled=not CAN_EDIT, help=None if CAN_EDIT else "只读账号不能收藏"):
         if len(same):
-            st.warning("团队收藏里已经有同名的人：" + "、".join(same["姓名"]) +
+            st.warning("人才收藏里已经有同名的人：" + "、".join(same["姓名"]) +
                        "。如果是同一个人（档案被拆开了），不用重复收藏；确认是不同的人再加入。")
         if len(row):
             if st.button("取消收藏", key=f"favdel_{key}", width="stretch"):
@@ -317,7 +357,7 @@ with st.sidebar:
             st.rerun()
     st.caption(f"{len(T):,} 位人才 · {len(P):,} 篇论文")
     st.divider()
-    only_fav = st.toggle(f"⭐ 只看团队收藏（{len(FAV_IDS)}）", key="only_fav")
+    only_fav = st.toggle(f"⭐ 只看人才收藏（{len(FAV_IDS)}）", key="only_fav")
     st.markdown("**分类筛选**")
     f_grp = st.multiselect(LBL["group"], GROUPS + UNC)
     f_dom = st.multiselect(LBL["domain"], [d for d in DOM_UI
@@ -330,7 +370,12 @@ with st.sidebar:
         stages = st.multiselect("职业阶段", [s for s in ["博士生/博后", "博后末期/青年PI", "PI中期", "资深"]
                                          if s in set(T["职业阶段"])])
         min_score = st.slider("综合分不低于", 0, 100, 0)
-    kw = st.text_input("搜索姓名 / 机构", help="支持中文名（如 周煊赫）、不同拼写（Xuanhe Zhou / Xuan-He Zhou / Zhou Xuanhe）")
+    def _search_jump():   # 输入搜索词后自动跳到人才线索榜看结果
+        if str(st.session_state.get("kw_search") or "").strip():
+            st.session_state["goto_page"] = "rank"
+    kw = st.text_input("搜索姓名 / 机构", key="kw_search", on_change=_search_jump,
+                       help="支持中文名（如 周煊赫）、不同拼写（Xuanhe Zhou / Xuan-He Zhou / Zhou Xuanhe）；"
+                            "输入后按回车，自动跳到人才线索榜")
 
 f = T.copy()
 if only_fav:
@@ -364,23 +409,23 @@ if kw:
 # 页面导航：用可以由程序切换的导航条代替标签页，点名字就能直接跳到「人才画像」；只渲染当前页，速度也更快
 # ---------------------------------------------------------------- 顶部状态栏 & 快讯
 ui.top_bar("AI TALENT TERMINAL",
-           "Scientist sourcing · rising stars · early-stage",
+           "Scientist sourcing · early-stage",
            [("TALENTS", f"{len(T):,}", ""),
-            ("RISING STARS", f"{int((T['新星资格'].astype(str).str.lower() == 'true').sum()) if '新星资格' in T else 0:,}", "r"),
+            ("AI RESEARCHERS", f"{int((T['大类'] == 'AI研究者').sum()):,}", "r"),
+            ("SCIENTISTS", f"{int((T['大类'] == '科学家').sum()):,}", "a"),
             ("PAPERS", f"{len(P):,}", "a"), ("WATCHLIST", f"{len(FAV_IDS)}", "g")],
            ui.now_text((DATA / "talents.csv").stat().st_mtime))
 
-PAGES = {"star": "🚀 新星榜", "fav": f"⭐ 团队收藏（{len(FAV_IDS)}）",
-         "rank": "🏆 人才线索榜", "person": "👤 人才画像", "inst": "🏛️ 机构", "log": "📝 修改动态"}
+PAGES = {"rank": "🏆 人才线索榜", "fav": f"⭐ 人才收藏（{len(FAV_IDS)}）",
+         "person": "👤 人才画像", "log": "📝 修改动态"}
 if IS_ADMIN and AUTH:
     PAGES["admin"] = "👥 成员管理"
 if st.session_state.get("goto_page") in PAGES:       # 程序要求跳页（必须在导航条画出来之前设置）
     st.session_state["page"] = st.session_state.pop("goto_page")
 if st.session_state.get("page") not in PAGES:
-    st.session_state["page"] = "star"
+    st.session_state["page"] = "rank"
 PAGE = st.radio("页面", list(PAGES), key="page", horizontal=True, label_visibility="collapsed",
                 format_func=lambda k: PAGES[k])
-HAS_STAR = "新星分" in T.columns
 
 
 def open_profile(aid: str, clear_key: str | None = None):
@@ -408,142 +453,40 @@ LIST_COLS = ["综合分", "姓名", "大类", "层级", "关系", "当前机构"
 SCORE_CFG = {"综合分": st.column_config.ProgressColumn("综合分", min_value=0, max_value=100, format="%.0f"),
              "推荐理由": st.column_config.TextColumn(width="large")}
 
-# ---------------------------------------------------------------- 新星榜
-STAR_CFG = {
-    "新星分": st.column_config.ProgressColumn("新星分", min_value=0, max_value=100, format="%.0f"),
-    "影响力分": st.column_config.ProgressColumn("影响力", min_value=0, max_value=100, format="%.0f"),
-    "势头分": st.column_config.ProgressColumn("势头", min_value=0, max_value=100, format="%.0f"),
-    "独立性分": st.column_config.ProgressColumn("独立性", min_value=0, max_value=100, format="%.0f"),
-    "学术年龄": st.column_config.NumberColumn(format="%d 年"),
-    "新星理由": st.column_config.TextColumn(width="large"),
-}
-STAR_COLS = ["领域排名", "新星分", "⭐", "姓名", "大类", "主学科", "当前机构", "国家", "学术年龄", "层级",
-             "影响力分", "势头分", "独立性分", "新星理由", "近期最佳论文", "关系"]
-
-# ---------------------------------------------------------------- 新星榜
-if PAGE == "star":
-    if not HAS_STAR:
-        st.warning(f"数据还没有新星评分。请在终端运行 `{RUN_CMD} --skip-fetch`（几秒到一分钟，不耗 API 额度），然后刷新本页。")
-    else:
-        stars = f[f["新星资格"].astype(str).str.lower() == "true"].copy()
-        c1, c2, c3, c4 = st.columns([1, 2.2, 1.2, 1.2])
-        if st.session_state.get("star_level") not in ("二级", "大类"):
-            st.session_state["star_level"] = "二级"
-        s_level = c1.radio("排名粒度", ["二级", "大类"], horizontal=True, key="star_level",
-                           format_func=lambda x: {"二级": LBL["domain"], "大类": LBL["group"]}[x])
-        dcol = {"二级": "主学科", "大类": "大类"}[s_level]
-        order = {"二级": DOM_UI, "大类": GROUPS + UNC}[s_level]
-        counts = stars[dcol].value_counts()
-        dom_opts = ["全部领域"] + [d for d in order if counts.get(d, 0)]
-        s_dom = c2.selectbox("领域", dom_opts, key="star_dom",
-                             format_func=lambda d: f"全部领域（{len(stars)} 人，各领域分别排名）" if d == "全部领域"
-                             else f"{d}（{counts.get(d, 0)} 人）")
-        s_new = c3.checkbox("只看未建联的", key="star_new")
-        s_sec = c4.checkbox("计入副领域", help="副领域是这个领域的新星也一起排名", key="star_sec")
-        if s_new:
-            stars = stars[stars["关系"] == "未建联"]
-
-        if s_dom == "全部领域":
-            stars = stars.sort_values("新星分", ascending=False)
-            stars["领域排名"] = stars.groupby(dcol).cumcount() + 1
-            top_k = st.slider("每个领域显示前几名", 3, 20, 5, key="star_topk")
-            rows = []
-            for d in order:
-                g = stars[stars[dcol] == d].head(top_k)
-                if len(g):
-                    rows.append({"领域": f"{d}（{int((stars[dcol] == d).sum())}）",
-                                 **{f"第{i + 1}名": f"{r['姓名']} · {txt(r['当前机构'], '')}"[:60]
-                                    for i, (_, r) in enumerate(g.iterrows())}})
-            st.markdown("#### 各领域新星总览")
-            st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
-            sview = stars[stars["领域排名"] <= top_k].sort_values([dcol, "领域排名"],
-                                                               key=lambda s: s.map({d: i for i, d in enumerate(order)})
-                                                               if s.name == dcol else s)
-        else:
-            in_dom = stars[dcol] == s_dom
-            if s_sec:
-                sec = stars["副学科"] if s_level == "二级" else stars["副学科"].map(tx.sub_group(TAX))
-                in_dom |= sec == s_dom
-            sview = stars[in_dom].sort_values("新星分", ascending=False)
-            sview["领域排名"] = range(1, len(sview) + 1)
-            top_n = st.slider("显示前几名", 10, max(10, min(200, len(sview))), min(30, max(10, len(sview))),
-                              key="star_topn") if len(sview) > 10 else len(sview)
-            sview = sview.head(top_n)
-
-        st.markdown(f"#### {'各领域新星排行' if s_dom == '全部领域' else s_dom + ' · 新星排行'}（{len(sview)} 人）")
-        show = [c for c in STAR_COLS if c in sview.columns]
-        hit = ui.dbl_table(sview, [ui.col("领域排名", "排名", "num"), ui.col("新星分", type="bar"), ui.col("⭐"), ui.col("姓名"),
-                                   ui.col("大类"), ui.col("主学科", LBL["domain"]), ui.col("当前机构"), ui.col("国家"),
-                                   ui.col("学术年龄", type="num", suffix=" 年"), ui.col("层级"),
-                                   ui.col("影响力分", "影响力", "bar"), ui.col("势头分", "势头", "bar"),
-                                   ui.col("独立性分", "独立性", "bar"),
-                                   ui.col("新星理由", wide=True), ui.col("近期最佳论文", wide=True), ui.col("关系")], key=f"star_table_{s_dom}_{s_level}", height=min(700, 40 + 33 * len(sview)))
-        if hit:
-            open_profile(hit)
-        st.download_button("下载这份榜单（CSV）", sview[show + ["ORCID", "author_id"]].to_csv(index=False)
-                           .encode("utf-8-sig"), f"新星榜_{s_dom}.csv", "text/csv")
-
-        if len(sview):
-            st.markdown("#### 快速查看")
-            who = st.selectbox("选择一位新星", sview["author_id"].tolist(), key="star_pick",
-                               format_func=lambda a: (lambda r: f"#{int(r['领域排名'])} {name_label(r['姓名'])} · "
-                                                      f"{txt(r['当前机构'], '')}")(sview.set_index("author_id").loc[a]))
-            r = sview.set_index("author_id").loc[who]
-            q1, q2 = st.columns([3, 2])
-            with q1:
-                st.markdown(f"**{r['姓名']}** · {txt(r['当前机构'])} · {r['国家']} · 学术年龄 {txt(r['学术年龄'])} 年"
-                            f" · {r['层级']} · {r['大类']}")
-                st.markdown(f"`{r['主学科']}` `{r['关系']}`")
-                if txt(r.get("新星理由"), ""):
-                    st.success(r["新星理由"])
-                if txt(r.get("近期最佳论文"), ""):
-                    pct = r.get("近期最佳论文百分位")
-                    st.write(f"近期最佳论文：{r['近期最佳论文']}"
-                             + (f"（同年同领域被引前 {max(1, round(100 - pct))}%）" if pd.notna(pct) else ""))
-                links = [profile_link(who)]
-                if isinstance(r.get("ORCID"), str):
-                    links.append(f"[ORCID]({r['ORCID']})")
-                links.append(f"[Google Scholar 搜索](https://scholar.google.com/scholar?q=%22{r['姓名'].replace(' ', '+')}%22)")
-                st.markdown(" · ".join(links))
-            with q2:
-                k1, k2, k3, k4 = st.columns(4)
-                k1.metric("新星分", f"{r['新星分']:.0f}")
-                k2.metric("影响力", f"{r['影响力分']:.0f}")
-                k3.metric("势头", f"{r['势头分']:.0f}")
-                k4.metric("独立性", f"{r['独立性分']:.0f}")
-                fav_widget(who, r["姓名"], f"star_{who}")
-                if st.button("打开人才画像（可记录跟进）", key="star_focus", type="primary"):
-                    open_profile(who)
-
-# ---------------------------------------------------------------- 团队收藏
+# ---------------------------------------------------------------- 人才收藏
 if PAGE == "fav":
     if FAV.empty:
-        st.info("还没有收藏。在「👤 人才画像」页或「🚀 新星榜」的快速查看里，点人名旁边的「☆ 加入团队收藏」即可收藏。"
+        st.info("还没有收藏。在「👤 人才画像」页，点人名旁边的「☆ 加入人才收藏」即可收藏。"
                 "收藏是全组共享的，每个人都能看到。")
     else:
-        st.caption("全组共享的重点关注名单。在人才画像页或新星榜可以收藏 / 取消收藏；所有收藏变动都会记在「📝 修改动态」里。")
+        st.caption("全组共享的重点关注名单。在人才画像页可以收藏 / 取消收藏；所有收藏变动都会记在「📝 修改动态」里。")
         g1, _g2 = st.columns(2)
         fu = g1.multiselect("收藏人", sorted(set(FAV["收藏人"])), key="fav_users")
         cols = ["author_id", "姓名", "当前机构", "国家", "大类", "主学科", "层级", "学术年龄", "综合分",
-                "新星分", "关系", "负责人"]
+                "关系", "人才特征", "代表作"]
         fv = FAV.merge(T[[c for c in cols if c in T.columns and c != "姓名"]], on="author_id", how="left")
         fv["姓名"] = fv["author_id"].map(dict(zip(T["author_id"], T["姓名"]))).fillna(fv["姓名"])   # 用人才库里最新的写法
         if fu:
             fv = fv[fv["收藏人"].isin(fu)]
-        show = [c for c in ["姓名", "当前机构", "国家", "大类", "主学科", "层级", "学术年龄", "综合分", "新星分",
-                            "关系", "负责人", "收藏人", "收藏时间"] if c in fv.columns]
+        show = [c for c in ["姓名", "当前机构", "国家", "大类", "主学科", "层级", "学术年龄", "综合分",
+                            "关系", "收藏人", "收藏时间"] if c in fv.columns]
         fv["所在赛道"] = ["是" if find_track(a) else "找不到" for a in fv["author_id"]]
         st.markdown(f"#### {len(fv)} 位")
         hit = ui.dbl_table(fv, [ui.col("姓名"), ui.col("当前机构"), ui.col("大类"), ui.col("主学科", LBL["domain"]),
-                                ui.col("新星分", type="num"), ui.col("关系"), ui.col("负责人"), ui.col("收藏人"),
+                                ui.col("关系"), ui.col("收藏人"),
                                 ui.col("所在赛道", "在库")], key="fav_table")
         if hit:
             open_profile(hit)
         gone = (fv["所在赛道"] == "找不到").sum()
         if gone:
             st.caption(f"有 {gone} 位在最新数据里找不到（可能是数据更新后作者号变了，或论文数不够进人才库），点名字打不开。")
-        st.download_button("下载收藏名单（CSV）", fv[show + ["author_id"]].to_csv(index=False).encode("utf-8-sig"),
-                           "团队收藏.csv", "text/csv")
+        fv["代表论文"] = [key_papers(a) for a in fv["author_id"]]
+        out = fv.reindex(columns=["姓名", "当前机构", "大类", "主学科", "人才特征", "代表论文"]).fillna("") \
+            .rename(columns={"主学科": LBL["domain"]})
+        out = out.assign(_has=out["人才特征"].astype(str).str.strip() != "") \
+            .sort_values("_has", ascending=False, kind="stable").drop(columns="_has")   # 有人才特征的排在前面
+        st.download_button("下载收藏名单（Excel）", fav_excel(out), "人才收藏.xlsx",
+                           "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 # ---------------------------------------------------------------- 2. 线索榜
 if PAGE == "rank":
@@ -575,7 +518,7 @@ if PAGE == "person":
     if f.empty:
         st.info("当前筛选条件下没有人才")
     else:
-        # 要打开的人：从新星榜、合作网络或「返回」跳过来时，先写入选择框的状态，再画选择框
+        # 要打开的人：从名单、合作网络或「返回」跳过来时，先写入选择框的状态，再画选择框
         pending = st.session_state.pop("focus_author", None)
         current = st.session_state.get("person_pick")
         in_pool = set(T["author_id"])
@@ -609,6 +552,8 @@ if PAGE == "person":
             st.markdown(" ".join(f"`{t}`" for t in tags if txt(t, "")))
             if p["副学科"]:
                 st.caption(f"副{LBL['domain']}：" + p["副学科"])
+            if isinstance(p.get("人才特征"), str) and p["人才特征"].strip():
+                st.info("**人才特征**：" + p["人才特征"].strip())
             if isinstance(p.get("推荐理由"), str) and p["推荐理由"]:
                 st.success("推荐理由：" + p["推荐理由"])
             links = [profile_link(aid)]
@@ -628,10 +573,6 @@ if PAGE == "person":
             n3.metric("h 指数", "—" if pd.isna(hv) else int(hv))
             st.caption(f"其中 {int(p['赛道论文数'])} 篇（被引 {int(p['赛道总被引']):,}）在人才库的检索范围内，"
                        "用于分类和评分")
-            if HAS_STAR and str(p.get("新星资格")).lower() == "true":
-                peers = T[(T["新星资格"].astype(str).str.lower() == "true") & (T["主学科"] == p["主学科"])]
-                rank = int((peers["新星分"] > p["新星分"]).sum()) + 1
-                st.info(f"🚀 学术新星 · 新星分 {p['新星分']:.0f} · {p['主学科']} 第 {rank} / {len(peers)} 名")
 
         mine = A[A["author_id"] == aid]
         works = P[P["work_id"].isin(mine["work_id"])].sort_values("年份")
@@ -654,10 +595,24 @@ if PAGE == "person":
 
         # 合作网络（以本人为中心）：点击节点或下方表格中的一行，即可打开这位合作者的画像
         co = A[A["work_id"].isin(mine["work_id"]) & (A["author_id"] != aid)]
-        co = (co.groupby(["author_id", "姓名"]).agg(合作次数=("work_id", "nunique"), 机构=("机构", "last"),
-                                                   类型=("机构类型", "last"))
-              .reset_index().sort_values("合作次数", ascending=False).head(30).reset_index(drop=True))
         pool = set(T["author_id"])
+        # 同名的合作者多半是同一个人被拆成了几条记录：合成一个节点（合作次数按论文去重），
+        # 节点指向在人才库里、合作最多的那条记录
+        co = co.assign(_k=co["姓名"].map(norm_name))
+        per = co.groupby("author_id").agg(_n=("work_id", "nunique"), _k=("_k", "first")).reset_index()
+        per["_in"] = per["author_id"].isin(pool)
+        main_id = per.sort_values(["_in", "_n"], ascending=False).drop_duplicates("_k").set_index("_k")["author_id"]
+        co = (co.groupby("_k").agg(合作次数=("work_id", "nunique"), 姓名=("姓名", "first")).reset_index()
+              .assign(author_id=lambda d: d["_k"].map(main_id)).drop(columns="_k")
+              .sort_values("合作次数", ascending=False).head(30).reset_index(drop=True))
+        co["机构"], co["类型"] = None, None
+        if len(co):   # 合作者的机构：在人才库里的用他的当前机构；否则取他所有论文里最常出现的机构（不只看合著的那几篇）
+            cur = T.set_index("author_id")[["当前机构", "当前机构类型"]]
+            known = A[A["author_id"].isin(co["author_id"]) & A["机构"].notna() & (A["机构"].astype(str) != "")]
+            mode = (known.groupby(["author_id", "机构", "机构类型"], dropna=False).size().reset_index(name="n")
+                    .sort_values("n", ascending=False).drop_duplicates("author_id").set_index("author_id"))
+            co["机构"] = co["author_id"].map(cur["当前机构"]).fillna(co["author_id"].map(mode["机构"]))
+            co["类型"] = co["author_id"].map(cur["当前机构类型"]).fillna(co["author_id"].map(mode["机构类型"]))
 
         def open_person(target: str):
             """跳到某位合作者：在人才库里就打开站内画像，否则给出外部主页链接。"""
@@ -684,7 +639,9 @@ if PAGE == "person":
                 fig.add_scatter(x=[0, r["x"]], y=[0, r["y"]], mode="lines", hoverinfo="skip",
                                 line=dict(width=0.5 + r["合作次数"], color="rgba(34,211,238,0.25)"),
                                 showlegend=False)
-            colors = co["类型"].map({"company": ui.RED, "education": ui.CYAN}).fillna("#94A3B8")
+            kind = co["类型"].map(lambda t: "company" if t == "company" else "education" if t == "education"
+                                  else "unknown" if pd.isna(t) or not str(t) else "institute")
+            colors = kind.map({"company": ui.RED, "education": ui.CYAN, "institute": ui.VIOLET, "unknown": "#5B6577"})
             tip = co["在人才库"].map({True: "点击查看画像", False: "不在人才库，点击获取外部主页"})
             fig.add_scatter(x=co["x"], y=co["y"], mode="markers+text", text=co["姓名"],
                             textposition="top center", showlegend=False,
@@ -697,7 +654,7 @@ if PAGE == "person":
                                           "<br>综合分 %{customdata[2]}<br><i>%{customdata[4]}</i><extra></extra>")
             fig.add_scatter(x=[0], y=[0], mode="markers+text", text=[p["姓名"]], textposition="bottom center",
                             marker=dict(size=28, color=ui.AMBER), showlegend=False, hoverinfo="skip")
-            fig.update_layout(title="合作网络（点击节点打开画像 · 实心=在人才库，空心=不在 · 红=企业，蓝=高校 · 线越粗合作越多）",
+            fig.update_layout(title="合作网络（点击节点打开画像 · 实心=在人才库，空心=不在 · 红=企业，蓝=高校，紫=研究所/医院等，灰=机构未知 · 线越粗合作越多）",
                               height=560, clickmode="event+select", dragmode=False,
                               xaxis=dict(visible=False), yaxis=dict(visible=False, scaleanchor="x"))
             ev = st.plotly_chart(fig, width="stretch", on_select="rerun", selection_mode="points",
@@ -745,7 +702,7 @@ if PAGE == "person":
             st.write(f"**{LBL['group']}**：由{LBL['domain']}「{p['主学科']}」决定 → {p['大类']}")
             st.write(f"**层级**：学术年龄 {txt(p.get('学术年龄'))} 年，h 指数 {txt(p.get('h指数'))}")
 
-        st.markdown("#### 跟进记录与人工修正")
+        st.markdown("#### 跟进记录")
         old = crm[crm["author_id"] == aid]
         o = old.iloc[0].to_dict() if len(old) else {c: "" for c in CRM_COLS}
         if o.get("更新时间"):
@@ -774,7 +731,8 @@ if PAGE == "person":
                 cur = RENAMED.get(cur, cur) if c == "主学科" else cur
                 v = col.selectbox({"主学科": LBL["domain"]}.get(c, c), opts, index=opts.index(cur) if cur in opts else 0)
                 ov[f"{c}(人工)"] = "" if v == auto else v
-            owner = st.text_input("负责人", o["负责人"] or (USER["name"] if CAN_EDIT else ""))
+            hl = st.text_area("人才特征", o.get("人才特征", "") or "",
+                              placeholder="例如：KAN 一作；MIT 博士，师从 Max Tegmark；元模型方向的开创者…")
             note = st.text_area("备注", o["备注"], placeholder="例如：已通过 XX 引荐，下周约电话；关注其新预印本…")
             submitted = st.form_submit_button("保存", disabled=not CAN_EDIT, type="primary")
             if submitted:
@@ -782,7 +740,8 @@ if PAGE == "person":
                     n = store.save_crm({"author_id": aid, "姓名": p["姓名"], "状态": o.get("状态", ""), "关系强度": rel,
                                         "转化意向": o.get("转化意向", ""), "核实状态": o.get("核实状态", ""),
                                         "人才类型(人工)": o.get("人才类型(人工)", ""),
-                                        "主方法(人工)": o.get("主方法(人工)", ""), **ov, "负责人": owner, "备注": note},
+                                        "主方法(人工)": o.get("主方法(人工)", ""), **ov, "负责人": o.get("负责人", ""),
+                                        "人才特征": hl, "备注": note},
                                        user=USER["name"], expected_version=seen)
                 except store.Conflict as e:
                     st.error(f"没有保存：{e}。请刷新页面看到最新内容后再改。")
@@ -797,24 +756,6 @@ if PAGE == "person":
         if len(hist):
             with st.expander(f"修改历史（{len(hist)} 条）"):
                 st.dataframe(hist.drop(columns=["姓名"]), width="stretch", hide_index=True)
-
-# ---------------------------------------------------------------- 4. 机构
-if PAGE == "inst":
-    kind = st.radio("机构类型", ["全部", "高校/科研", "企业"], horizontal=True)
-    ii = I.copy()
-    if kind == "高校/科研":
-        ii = ii[ii["类型"].isin(["education", "facility", "government", "nonprofit", "healthcare"])]
-    elif kind == "企业":
-        ii = ii[ii["类型"] == "company"]
-    ii["国家"] = ii["国家/地区"].map(country_cn)
-    top = ii.head(30)
-    st.plotly_chart(px.bar(top, x="赛道论文数", y="机构", color="国家", orientation="h",
-                           hover_data=["作者数", "总被引"], title="机构 Top 30（按论文数）")
-                    .update_layout(yaxis=dict(autorange="reversed"), height=780), width="stretch")
-    # 每个机构的高潜人才
-    hi = f[f["综合分"] >= 70].groupby("当前机构").size().rename("高潜人才数").reset_index()
-    st.markdown("#### 高潜人才聚集的机构（当前筛选）")
-    st.dataframe(hi.sort_values("高潜人才数", ascending=False).head(50), width="stretch", hide_index=True)
 
 # ---------------------------------------------------------------- 7. 修改动态
 if PAGE == "log":
