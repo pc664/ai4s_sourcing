@@ -15,7 +15,9 @@ th:hover { color:var(--cyan); }
 th .arr { color:var(--neon); margin-left:4px; }
 td { padding:7px 10px; border-bottom:1px solid rgba(27,42,61,.6); white-space:nowrap; overflow:hidden;
      text-overflow:ellipsis; max-width:240px; }
-td.wide { max-width:520px; }
+/* 长文本列（推荐理由、代表作等）：自动换行，完整显示，不截断 */
+td.wide { max-width:520px; min-width:280px; white-space:normal; overflow:visible; text-overflow:clip; line-height:1.5; }
+td { vertical-align:top; }
 tr { cursor:default; }
 tbody tr:hover td { background:rgba(34,211,238,.07); }
 tbody tr.hit td { background:rgba(0,240,168,.18); }

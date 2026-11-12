@@ -24,6 +24,7 @@ import yaml
 from src import store
 from src import taxonomy as tx
 from src import tracks
+from src import recommend as rec
 from src import ui
 from src.store import CRM_COLS, OVERRIDABLE
 
@@ -416,7 +417,7 @@ ui.top_bar("AI TALENT TERMINAL",
             ("PAPERS", f"{len(P):,}", "a"), ("WATCHLIST", f"{len(FAV_IDS)}", "g")],
            ui.now_text((DATA / "talents.csv").stat().st_mtime))
 
-PAGES = {"rank": "🏆 人才线索榜", "fav": f"⭐ 人才收藏（{len(FAV_IDS)}）",
+PAGES = {"rank": "🏆 人才线索榜", "fav": f"⭐ 人才收藏（{len(FAV_IDS)}）", "rec": "✨ 推荐",
          "person": "👤 人才画像", "log": "📝 修改动态"}
 if IS_ADMIN and AUTH:
     PAGES["admin"] = "👥 成员管理"
@@ -487,6 +488,34 @@ if PAGE == "fav":
             .sort_values("_has", ascending=False, kind="stable").drop(columns="_has")   # 有人才特征的排在前面
         st.download_button("下载收藏名单（Excel）", fav_excel(out), "人才收藏.xlsx",
                            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+# ---------------------------------------------------------------- 推荐
+@st.cache_data(max_entries=4, show_spinner="正在计算推荐…")
+def recommend_cached(fav_key: tuple, fav_domains: tuple, version: float, logic: int,
+                     _t: pd.DataFrame, _a: pd.DataFrame, _p: pd.DataFrame):
+    return rec.recommend(_t, _a, _p, list(fav_key), top_n=1000)
+
+
+if PAGE == "rec":
+    in_pool = sorted(set(FAV_IDS) & set(T["author_id"]))
+    if len(in_pool) < 3:
+        st.info("暂时没有推荐。")
+    else:
+        _fd = tuple(T[T["author_id"].isin(in_pool)].sort_values("author_id")["主学科"])   # 人工改过领域后要重新算
+        recs, prof = recommend_cached(tuple(in_pool), _fd, (DATA / "talents.csv").stat().st_mtime, rec.VERSION, T, A, P)
+        r1, _r2 = st.columns([2, 1])
+        n_show = r1.slider("显示前多少位", 20, 300, 50, step=10, key="rec_n")
+        view = recs[recs["author_id"].isin(set(f["author_id"]))].head(n_show)
+        view = view.merge(T[["author_id", "关系"]], on="author_id", how="left", suffixes=("", "_t")) if "关系" not in view else view
+        st.markdown(f"#### 推荐 {len(view)} 位")
+        hit = ui.dbl_table(view, [ui.col("推荐分", type="bar"), ui.col("姓名"), ui.col("当前机构"), ui.col("大类"),
+                                  ui.col("主学科", LBL["domain"]), ui.col("层级"), ui.col("推荐理由", "研究主题", wide=True),
+                                  ui.col("综合分", type="num"), ui.col("关系")], key="rec_table", height=650)
+        if hit:
+            open_profile(hit)
+        out = view.reindex(columns=["推荐分", "姓名", "当前机构", "大类", "主学科", "层级", "推荐理由", "综合分", "代表作"]) \
+            .rename(columns={"主学科": LBL["domain"], "代表作": "代表论文", "推荐理由": "研究主题"})
+        st.download_button("下载推荐名单（CSV）", out.to_csv(index=False).encode("utf-8-sig"), "推荐名单.csv", "text/csv")
 
 # ---------------------------------------------------------------- 2. 线索榜
 if PAGE == "rank":
